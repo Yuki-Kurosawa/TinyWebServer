@@ -7,14 +7,9 @@
 
 /* begin handler registrations */
 
-struct Handler {
-	const char *path;   // Request path
-	RequestHandler handler; // Pointer to the handler function
-};
-
-struct Handler handlers[] = {
-	{ "/", DemoProcessRequest }, // Registering the demo handler for testing purposes
-	{ "/test", DemoProcessRequest }, // Registering the demo handler for testing purposes
+Handler handlers[] = {
+	{ {"Site Root","/", HANDLER_STATIC}, DemoProcessRequest }, // Registering the demo handler for testing purposes
+	{ {"Test Handler","/test", HANDLER_STATIC}, DemoProcessRequest }, // Registering the demo handler for testing purposes
 	{ NULL, NULL } // End marker for the handlers array
 };
 
@@ -632,9 +627,10 @@ void HandleRequest(char* root_dir, size_t req_len, char request[], size_t *resp_
 	if(ERR_PARSE==0 && req->path != NULL) // Check if parsing was successful and path is not NULL
 	{
 		// Find the appropriate handler for the request path
-		for (int i = 0; handlers[i].path != NULL; i++) {
-			if (strcmp(handlers[i].path, req->path) == 0) {
+		for (int i = 0; handlers[i].metadata.path != NULL; i++) {
+			if (strcmp(handlers[i].metadata.path, req->path) == 0) {
 				// Call the registered handler function
+				req->handler = handlers[i].metadata; // Set the handler function
 				handlers[i].handler(req, resp);
 				break; // Handler found and called, exit loop
 			}

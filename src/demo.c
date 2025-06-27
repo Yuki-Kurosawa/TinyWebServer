@@ -5,8 +5,7 @@
 #include <stdlib.h> // For malloc and free
 
 void DemoProcessRequest(Request *req, Response *res)
-{
-	printf("Demo handler processing request...\n");
+{	
 	if (req == NULL || res == NULL) {
 		printf("Invalid request or response object.\n");
 		return; // Invalid request or response object, do nothing

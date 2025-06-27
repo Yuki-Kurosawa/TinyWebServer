@@ -12,6 +12,20 @@
 #define MAX_KEY_LEN 64
 #define MAX_VALUE_LEN 1024
 
+typedef enum {
+	HANDLER_STATIC, // Static Path Handler (example:/path/file.do)
+	HANDLER_PREFIX, // Prefix Path Handler (example:/path/* , set path to /path/)
+	HANDLER_SUFFIX, // Suffix Path Handler (example:/*/file.do , set path to file.do)
+	HANDLER_REGEX,  // Regex Path Handler (example:/path/.* , set path to ^/path/(.*)$, pcre2 style regex)
+} HandlerType;
+
+// HttpRequestHandler Metadata
+typedef struct {
+	char* name; // HandlerName
+	char *path; // Path, Not allowed characters: ',",\,/,;,:,?,@,#,$,%,^,*,(,),!,<,>,[,],{,},|,`,~,=,+ and whitespace
+	HandlerType type; // HandlerType
+} HandlerMetadata;
+
 // Enums for HTTP methods and versions (can be expanded)
 typedef enum {
     METHOD_UNKNOWN,
@@ -39,6 +53,12 @@ typedef struct {
 						// first version just do GET and POST
 						// other will be added later
 	HttpVersion version; // the HTTP/1.0 thing
+
+	HandlerMetadata handler; // Handler metadata for this request, used to find the handler
+						// it is used to find the handler for this request
+						// it can be NULL if not set, but it is recommended to set it
+						// so that we can check the handler for this request
+
     char *path_and_query; // Path and query string of the request, /index.html?q=1&b=2
 	char *path; // Path of the request, e.g., /index.html
 	char *root_dir; // Root directory for this request, e.g., /var/www/html
@@ -121,5 +141,11 @@ typedef struct {
 // This function will encapsulate the high-level application logic (e.g., serving files).
 // It will take a Request object and fill in a Response object.
 typedef void (*RequestHandler)(Request *req, Response *res);
+
+// HttpRequestHandler
+typedef struct {
+	HandlerMetadata metadata;   // handler metadata
+	RequestHandler handler; // Pointer to the handler function
+} Handler;
 
 #endif // HANDLER_H
