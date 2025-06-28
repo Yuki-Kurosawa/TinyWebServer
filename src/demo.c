@@ -50,6 +50,21 @@ void DemoProcessRequest(Request *req, Response *res)
 		req->root_dir ? file_path : "N/A");
 
 	body_len += snprintf(html_body + body_len, 16384 - body_len,
+		"<p>Request Handler Name: %s</p>\n",
+		req->handler.name ? req->handler.name : "N/A");
+
+	body_len += snprintf(html_body + body_len, 16384 - body_len,
+		"<p>Request Handler Path: %s</p>\n",
+		req->handler.path ? req->handler.path : "N/A");
+
+	body_len += snprintf(html_body + body_len, 16384 - body_len,
+		"<p>Request Handler Type: %s</p>\n",
+		req->handler.type ? (req->handler.type==HANDLER_STATIC?"STATIC":
+		(req->handler.type==HANDLER_PREFIX?"PREFIX":
+		(req->handler.type==HANDLER_SUFFIX?"SUFFIX":"REGEX"))) : "N/A");
+
+
+	body_len += snprintf(html_body + body_len, 16384 - body_len,
 		"<p>Query String: %s</p>\n",
 		req->query_string ? req->query_string : "");
 

@@ -13,6 +13,7 @@
 #define MAX_VALUE_LEN 1024
 
 typedef enum {
+	HANDLER_UNDEFINED, // Undefined Handler
 	HANDLER_STATIC, // Static Path Handler (example:/path/file.do)
 	HANDLER_PREFIX, // Prefix Path Handler (example:/path/* , set path to /path/)
 	HANDLER_SUFFIX, // Suffix Path Handler (example:/*/file.do , set path to file.do)

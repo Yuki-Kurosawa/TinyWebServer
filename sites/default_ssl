@@ -1,7 +1,7 @@
 listen 8443 ssl;
 
-ssl_certificate /root/www/x.crt;
-ssl_key /root/www/x.pem;
-ssl_chain /root/www/x_chain.crt;
+ssl_certificate ./x.crt;
+ssl_key ./x.pem;
+ssl_chain ./x_chain.crt;
 
 root /var/www/html;

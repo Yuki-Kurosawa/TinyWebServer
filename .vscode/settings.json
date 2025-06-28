@@ -1,5 +1,15 @@
 {
 	"files.associations": {
-		"err.h": "c"
+		"err.h": "c",
+		"cstdlib": "c",
+		"type_traits": "c",
+		"bit": "c",
+		"compare": "c",
+		"limits": "c",
+		"new": "c",
+		"stdlib.h": "c",
+		"typeinfo": "c",
+		"stdio.h": "c",
+		"demo.h": "c"
 	}
 }
