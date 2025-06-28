@@ -651,93 +651,93 @@ void HandleRequest(char* root_dir, size_t req_len, char request[], size_t *resp_
                         break; // Handler found and called, exit loop
                     }
                     break;
-                    case HANDLER_PREFIX:
-                    {
-                        size_t prefix_len = strlen(handlers[i].metadata.path);
-                        if (strncmp(req->path, handlers[i].metadata.path, prefix_len) == 0) {
-                            // Ensure it's a true prefix match, not just starts-with (e.g., "/test" matches "/test/abc" but not "/testing")
-                            if (req->path[prefix_len] == '\0' || req->path[prefix_len] == '/') {
-                                current_handler_meta = &handlers[i].metadata;
-                                current_handler = handlers[i].handler;
-                                match_found = true;
-                            }
-                        }
-                        break;
-                    }
-                    case HANDLER_SUFFIX:
-                    {
-                        size_t path_len = strlen(req->path);
-                        size_t suffix_len = strlen(handlers[i].metadata.path);
-                        if (path_len >= suffix_len &&
-                            strcmp(req->path + (path_len - suffix_len), handlers[i].metadata.path) == 0) 
-                            {
-                                current_handler_meta = &handlers[i].metadata;
-                                current_handler = handlers[i].handler;
-                                match_found = true;
-                            }
-                        break;
-                    }
-                    case HANDLER_REGEX:
-                    {
-                        // --- PCRE2 Regex Matching Implementation ---
-                        pcre2_code *re;
-                        PCRE2_SPTR pattern = (PCRE2_SPTR)handlers[i].metadata.path;
-                        PCRE2_SPTR subject = (PCRE2_SPTR)req->path;
-                        int errorcode;
-                        PCRE2_SIZE erroroffset;
-                        pcre2_match_data *match_data;
-                        int rc;
-
-                        // 1. Compile the regex pattern
-                        // In a production system, you would compile this once during startup
-                        // and store the compiled 're' in HandlerMetadata to avoid recompiling per request.
-                        re = pcre2_compile(pattern, PCRE2_ZERO_TERMINATED, 0, &errorcode, &erroroffset, NULL);
-                        if (re == NULL) {
-                            PCRE2_UCHAR buffer[256];
-                            pcre2_get_error_message(errorcode, buffer, sizeof(buffer));
-                            fprintf(stderr, "PCRE2 compilation failed at offset %lu: %s\n", erroroffset, buffer);
-                            // Consider how to handle a bad regex pattern (e.g., skip this handler, log error)
-                            break; 
-                        }
-
-                        // 2. Create match data block
-                        match_data = pcre2_match_data_create_from_pattern(re, NULL);
-                        if (match_data == NULL) {
-                            perror("PCRE2 match data creation failed");
-                            pcre2_code_free(re);
-                            break;
-                        }
-
-                        // 3. Execute the regex match
-                        rc = pcre2_match(re, subject, strlen((char *)subject), 0, 0, match_data, NULL);
-
-                        if (rc >= 0) { // Match successful
-                            match_found = true;
+                }
+                case HANDLER_PREFIX:
+                {
+                    size_t prefix_len = strlen(handlers[i].metadata.path);
+                    if (strncmp(req->path, handlers[i].metadata.path, prefix_len) == 0) {
+                        // Ensure it's a true prefix match, not just starts-with (e.g., "/test" matches "/test/abc" but not "/testing")
+                        if (req->path[prefix_len] == '\0' || req->path[prefix_len] == '/') {
                             current_handler_meta = &handlers[i].metadata;
                             current_handler = handlers[i].handler;
-
-                            // Optional: Extract captured substrings
-                            // PCRE2_SPTR ovector = pcre2_get_ovector_pointer(match_data);
-                            // for (int j = 0; j < rc; j++) {
-                            //     PCRE2_SIZE start = ovector[2*j];
-                            //     PCRE2_SIZE end = ovector[2*j+1];
-                            //     printf("Match %d: %.*s\n", j, (int)(end - start), (char*)subject + start);
-                            //     // If you need to pass captures to the handler, you'd extend Request struct
-                            // }
-                        } else if (rc == PCRE2_ERROR_NOMATCH) {
-                            // No match, this is expected for non-matching paths
-                        } else {
-                            // Other PCRE2 error during match
-                            PCRE2_UCHAR buffer[256];
-                            pcre2_get_error_message(rc, buffer, sizeof(buffer));
-                            fprintf(stderr, "PCRE2 matching error: %s\n", buffer);
+                            match_found = true;
                         }
+                    }
+                    break;
+                }
+                case HANDLER_SUFFIX:
+                {
+                    size_t path_len = strlen(req->path);
+                    size_t suffix_len = strlen(handlers[i].metadata.path);
+                    if (path_len >= suffix_len &&
+                        strcmp(req->path + (path_len - suffix_len), handlers[i].metadata.path) == 0) 
+                        {
+                            current_handler_meta = &handlers[i].metadata;
+                            current_handler = handlers[i].handler;
+                            match_found = true;
+                        }
+                    break;
+                }
+                case HANDLER_REGEX:
+                {
+                    // --- PCRE2 Regex Matching Implementation ---
+                    pcre2_code *re;
+                    PCRE2_SPTR pattern = (PCRE2_SPTR)handlers[i].metadata.path;
+                    PCRE2_SPTR subject = (PCRE2_SPTR)req->path;
+                    int errorcode;
+                    PCRE2_SIZE erroroffset;
+                    pcre2_match_data *match_data;
+                    int rc;
 
-                        // 4. Free PCRE2 resources
-                        pcre2_match_data_free(match_data);
-                        pcre2_code_free(re); // Free compiled regex (if compiled here)
+                    // 1. Compile the regex pattern
+                    // In a production system, you would compile this once during startup
+                    // and store the compiled 're' in HandlerMetadata to avoid recompiling per request.
+                    re = pcre2_compile(pattern, PCRE2_ZERO_TERMINATED, 0, &errorcode, &erroroffset, NULL);
+                    if (re == NULL) {
+                        PCRE2_UCHAR buffer[256];
+                        pcre2_get_error_message(errorcode, buffer, sizeof(buffer));
+                        fprintf(stderr, "PCRE2 compilation failed at offset %lu: %s\n", erroroffset, buffer);
+                        // Consider how to handle a bad regex pattern (e.g., skip this handler, log error)
+                        break; 
+                    }
+
+                    // 2. Create match data block
+                    match_data = pcre2_match_data_create_from_pattern(re, NULL);
+                    if (match_data == NULL) {
+                        perror("PCRE2 match data creation failed");
+                        pcre2_code_free(re);
                         break;
                     }
+
+                    // 3. Execute the regex match
+                    rc = pcre2_match(re, subject, strlen((char *)subject), 0, 0, match_data, NULL);
+
+                    if (rc >= 0) { // Match successful
+                        match_found = true;
+                        current_handler_meta = &handlers[i].metadata;
+                        current_handler = handlers[i].handler;
+
+                        // Optional: Extract captured substrings
+                        // PCRE2_SPTR ovector = pcre2_get_ovector_pointer(match_data);
+                        // for (int j = 0; j < rc; j++) {
+                        //     PCRE2_SIZE start = ovector[2*j];
+                        //     PCRE2_SIZE end = ovector[2*j+1];
+                        //     printf("Match %d: %.*s\n", j, (int)(end - start), (char*)subject + start);
+                        //     // If you need to pass captures to the handler, you'd extend Request struct
+                        // }
+                    } else if (rc == PCRE2_ERROR_NOMATCH) {
+                        // No match, this is expected for non-matching paths
+                    } else {
+                        // Other PCRE2 error during match
+                        PCRE2_UCHAR buffer[256];
+                        pcre2_get_error_message(rc, buffer, sizeof(buffer));
+                        fprintf(stderr, "PCRE2 matching error: %s\n", buffer);
+                    }
+
+                    // 4. Free PCRE2 resources
+                    pcre2_match_data_free(match_data);
+                    pcre2_code_free(re); // Free compiled regex (if compiled here)
+                    break;
                 }
 		    }
 	    } 
