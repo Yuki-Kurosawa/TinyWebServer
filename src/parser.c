@@ -744,7 +744,7 @@ void HandleRequest(char* root_dir, size_t req_len, char request[], size_t *resp_
             
         if (match_found) 
         {
-            printf("Handler found for path %s %s\n", req->path, current_handler_meta->name);
+            printf("Handler found for path %s with \"%s\"\n", req->path, current_handler_meta->name);
             req->handler = *current_handler_meta; // Set the handler metadata in the request object
             current_handler(req, resp); // Call the registered handler function
         }
