@@ -1,3 +1,4 @@
-listen 8080;
+listen 0.0.0.0:4880;
+listen [::]:6880;
 
 root /var/www/default/html;

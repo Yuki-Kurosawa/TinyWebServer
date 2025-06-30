@@ -3,6 +3,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <poll.h>
@@ -12,863 +14,777 @@
 #include <sys/types.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <ctype.h> // For isdigit
 
 // Include OpenSSL headers
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
-#include "client.h"
+#include "client.h" // 确保这里包含您最新的 client.h
+
+// Global storage for all parsed SiteConfig structures
+// These are allocated once and pointed to by ListenSocket structures
+SiteConfig* all_parsed_sites[MAX_LISTEN_SOCKETS * MAX_SITE_LISTENERS]; // A bit over-allocated but simple
+int num_total_parsed_sites = 0;
 
 
+// --- Helper Functions Implementation ---
 
-// parse_single_listen_directive, read_global_config, parse_site_file, read_all_site_configs
-// (These functions remain in www.c as they are part of the main server configuration logic)
+// Function to parse the *value part* of a listen directive (e.g., "0.0.0.0:4443 ssl" or "8080")
+// Returns true on success, false on failure.
+bool parse_listen_value_into_config(char *value_part, ListenSocketConfig *config) {
+    memset(config, 0, sizeof(ListenSocketConfig)); // Clear structure
 
-// Function to parse a single listen directive line
-ParsedListenDirectives parse_single_listen_directive(char *line) {
-    ParsedListenDirectives result = {{0}, 0};
-
-    char *listen_keyword = strtok(line, " \t");
-    if (listen_keyword == NULL || strcmp(listen_keyword, "listen") != 0) {
-        return result;
+    char *current_token = strtok(value_part, " \t"); // First token is address or port
+    if (current_token == NULL) {
+        fprintf(stderr, "Invalid listen value format: missing address/port in '%s'\n", value_part);
+        return false;
     }
 
-    char *address_part = strtok(NULL, " \t;");
-    if (address_part == NULL) {
-        fprintf(stderr, "Invalid listen directive format: missing address or port in '%s', file: %s\n", line, "N/A"); // Cannot know filepath here easily
-        return result;
-    }
-
-    char *ssl_keyword = NULL;
-    char *semicolon = strtok(NULL, " \t;");
-
-    if (semicolon != NULL) {
-        ssl_keyword = semicolon;
-    }
+    char *next_token = strtok(NULL, " \t;"); // Next token could be 'ssl' or part of address:port or NULL
 
     char *port_str = NULL;
-    char *address_str = NULL;
-    bool is_ipv6_format = false;
-    bool is_port_only = false;
+    char *address_only = NULL;
+    int port = 0;
 
-    if (address_part[0] == '[') {
-        char *bracket_end = strchr(address_part, ']');
-        if (bracket_end != NULL) {
-            *bracket_end = '\0';
-            address_str = address_part + 1;
-            if (*(bracket_end + 1) == ':') {
-                port_str = bracket_end + 2;
-            }
-            is_ipv6_format = true;
-        } else {
-            fprintf(stderr, "Invalid IPv6 listen directive format: %s\n", address_part);
-            return result;
+    // Determine if the first token is a port-only or an address part
+    // A simple heuristic: if it contains '.' or ':', it's likely an address. Otherwise, a port.
+    bool is_port_only = true;
+    for (char* p = current_token; *p != '\0'; p++) {
+        if (!isdigit((unsigned char)*p)) { // Use isdigit for robustness
+            is_port_only = false;
+            break;
+        }
+    }
+
+    if (is_port_only) {
+        port_str = current_token;
+        strcpy(config->address, "0.0.0.0"); // Default to IPv4 ANY address
+        config->family = AF_INET;
+        // If there was a next_token, it could be "ssl" or an error
+        if (next_token != NULL && strcmp(next_token, "ssl") == 0) {
+            config->ssl_enabled = true;
+        } else if (next_token != NULL) { // Unexpected token
+             fprintf(stderr, "Invalid token '%s' after port in listen directive.\n", next_token);
+             return false;
         }
     } else {
-        char *colon = strchr(address_part, ':');
-        if (colon != NULL) {
-            *colon = '\0';
-            address_str = address_part;
-            port_str = colon + 1;
-            is_ipv6_format = false;
+        // It's an address:port or just an address
+        address_only = current_token;
+
+        // Check for IPv6 address with brackets
+        if (address_only[0] == '[') {
+            char *bracket_end = strchr(address_only, ']');
+            if (bracket_end == NULL) {
+                fprintf(stderr, "Invalid IPv6 address format: missing ']' in '%s'\n", address_only);
+                return false;
+            }
+            *bracket_end = '\0'; // Null-terminate at ']'
+            address_only++; // Address starts after '['
+
+            if ( *(bracket_end + 1) == ':' ) { // Check if port is explicitly provided after ]
+                port_str = bracket_end + 2; // Port starts after ']:'
+            } else {
+                fprintf(stderr, "Invalid IPv6 address format: missing ':' after ']' in '%s'\n", current_token);
+                return false;
+            }
+            config->family = AF_INET6;
         } else {
-            port_str = address_part;
-            address_str = NULL;
-            is_port_only = true;
-            is_ipv6_format = false;
+            // IPv4 address:port or just IPv4 address
+            char *colon = strchr(address_only, ':');
+            if (colon != NULL) {
+                *colon = '\0'; // Null-terminate address part
+                port_str = colon + 1; // Port starts after ':'
+            }
+            config->family = AF_INET;
+        }
+
+        // Now handle the next_token for SSL
+        if (next_token != NULL && strcmp(next_token, "ssl") == 0) {
+            config->ssl_enabled = true;
+        } else if (next_token != NULL) { // Unexpected token
+             fprintf(stderr, "Invalid token '%s' after address/port in listen directive.\n", next_token);
+             return false;
         }
     }
 
     if (port_str == NULL) {
-        fprintf(stderr, "Port not specified in listen directive: %s\n", address_part);
-        return result;
+        fprintf(stderr, "Invalid listen value format: missing port for address '%s'\n", current_token);
+        return false;
     }
-    int port = atoi(port_str);
+
+    port = atoi(port_str);
     if (port <= 0 || port > 65535) {
-        fprintf(stderr, "Invalid port number: %s\n", port_str);
-        return result;
+        fprintf(stderr, "Invalid port number: %d\n", port);
+        return false;
     }
+    config->port = port;
 
-    bool ssl_enabled_for_directive = false;
-    if (ssl_keyword != NULL && strcmp(ssl_keyword, "ssl") == 0) {
-        ssl_enabled_for_directive = true;
-        char *extra_token = strtok(NULL, " \t;");
-        if (extra_token != NULL) {
-            fprintf(stderr, "Warning: Extra tokens after 'ssl;' in listen directive: %s. Ignoring.\n", extra_token);
-        }
-    } else if (ssl_keyword != NULL) {
-         fprintf(stderr, "Warning: Unknown token after address/port in listen directive: %s. Expected 'ssl;'.\n", ssl_keyword);
-    }
-
-
-    if (is_port_only) {
-        result.count = 2;
-
-        result.configs[0].is_ipv6 = false;
-        strcpy(result.configs[0].address, "0.0.0.0");
-        result.configs[0].port = port;
-        result.configs[0].ssl_enabled = ssl_enabled_for_directive;
-        result.configs[0].ssl_ctx = NULL;
-        result.configs[0].site_ssl_cert_file[0] = '\0';
-        result.configs[0].site_ssl_key_file[0] = '\0';
-        result.configs[0].site_ssl_chain_file[0] = '\0';
-		result.configs[0].root_dir[0] = '\0'; 
-		result.configs[0].server_name = NULL; 
-
-        result.configs[1].is_ipv6 = true;
-        strcpy(result.configs[1].address, "::");
-        result.configs[1].port = port;
-        result.configs[1].ssl_enabled = ssl_enabled_for_directive;
-        result.configs[1].ssl_ctx = NULL;
-        result.configs[1].site_ssl_cert_file[0] = '\0';
-        result.configs[1].site_ssl_key_file[0] = '\0';
-        result.configs[1].site_ssl_chain_file[0] = '\0';
-		result.configs[1].root_dir[0] = '\0'; 
-		result.configs[1].server_name = NULL; 
-
-    } else {
-        result.count = 1;
-        result.configs[0].is_ipv6 = is_ipv6_format;
-        result.configs[0].port = port;
-        result.configs[0].ssl_enabled = ssl_enabled_for_directive;
-        result.configs[0].ssl_ctx = NULL;
-        result.configs[0].site_ssl_cert_file[0] = '\0';
-        result.configs[0].site_ssl_key_file[0] = '\0';
-        result.configs[0].site_ssl_chain_file[0] = '\0';
-		result.configs[0].root_dir[0] = '\0'; 
-		result.configs[0].server_name = NULL; 
-
-        if (address_str != NULL && strlen(address_str) > 0) {
-             strncpy(result.configs[0].address, address_str, INET6_ADDRSTRLEN - 1);
-             result.configs[0].address[INET6_ADDRSTRLEN - 1] = '\0';
+    // Copy address (if it was part of an address:port string)
+    if (address_only != NULL) {
+        if (strcmp(address_only, "*") == 0 || strcmp(address_only, "0.0.0.0") == 0) {
+            strcpy(config->address, "0.0.0.0");
+        } else if (strcmp(address_only, "::") == 0) {
+            strcpy(config->address, "::");
+        } else if (config->family == AF_INET && inet_pton(AF_INET, address_only, &(struct in_addr){0}) == 1) {
+            strncpy(config->address, address_only, INET_ADDRSTRLEN - 1);
+            config->address[INET_ADDRSTRLEN - 1] = '\0';
+        } else if (config->family == AF_INET6 && inet_pton(AF_INET6, address_only, &(struct in6_addr){0}) == 1) {
+            strncpy(config->address, address_only, INET6_ADDRSTRLEN - 1);
+            config->address[INET6_ADDRSTRLEN - 1] = '\0';
         } else {
-             if (is_ipv6_format) {
-                strcpy(result.configs[0].address, "::");
-            } else {
-                strcpy(result.configs[0].address, "0.0.0.0");
-            }
+            fprintf(stderr, "Invalid address '%s' in listen value.\n", address_only);
+            return false;
         }
     }
+    // If address_only is NULL, it was a port-only directive, address is already "0.0.0.0"
 
-    return result;
+    return true;
 }
 
-// Function to read global configuration
-GlobalConfig read_global_config(const char *filepath) {
-    GlobalConfig config = {true, true, "nobody", false};
-    FILE *file = fopen(filepath, "r");
 
-    if (file == NULL) {
-        perror("Error opening global config file");
-        fprintf(stderr, "Could not open global config file: %s. Using default settings (ipv4 on, ipv6 on, worker nobody).\n", filepath);
-        return config;
-    }
-
-    char line[MAX_LINE_SIZE];
-    while (fgets(line, sizeof(line), file) != NULL) {
-        line[strcspn(line, "\n")] = 0;
-
-        if (line[0] == '#' || line[0] == '\0') {
-            continue;
-        }
-
-        char line_copy[MAX_LINE_SIZE];
-        strncpy(line_copy, line, MAX_LINE_SIZE - 1);
-        line_copy[MAX_LINE_SIZE - 1] = '\0';
-
-        char *key = strtok(line_copy, " \t");
-        if (key == NULL) continue;
-
-        char *value = strtok(NULL, " \t;");
-        if (value == NULL) {
-            fprintf(stderr, "Invalid global config directive: %s\n", line);
-            continue;
-        }
-
-        if (strcmp(key, "ipv4") == 0) {
-            if (strcmp(value, "on") == 0) config.ipv4_enabled = true;
-            else if (strcmp(value, "off") == 0) config.ipv4_enabled = false;
-            else fprintf(stderr, "Invalid value for ipv4 directive: %s\n", value);
-        } else if (strcmp(key, "ipv6") == 0) {
-            if (strcmp(value, "on") == 0) config.ipv6_enabled = true;
-            else if (strcmp(value, "off") == 0) config.ipv6_enabled = false;
-            else fprintf(stderr, "Invalid value for ipv6 directive: %s\n", value);
-        } else if (strcmp(key, "worker") == 0) {
-            strncpy(config.worker_user, value, MAX_LINE_SIZE - 1);
-            config.worker_user[MAX_LINE_SIZE - 1] = '\0';
-        }
-        else {
-            fprintf(stderr, "Unknown global config directive: %s\n", key);
-        }
-    }
-
-    fclose(file);
-    config.specified = true;
-    return config;
-}
-
-// Function to parse a single site configuration file and add listeners to a list
-ListenConfig* parse_site_file(const char *filepath, const GlobalConfig *global_config, ListenConfig *current_listeners, int *current_num_listeners) {
+// Function to parse a single site config file and return a SiteConfig
+// This function parses directives specific to a site (server_name, root, ssl_certs, listen directives)
+SiteConfig *parse_site_file(const char *filepath, GlobalConfig *global_config) {
     FILE *file = fopen(filepath, "r");
     if (file == NULL) {
-        perror("Error opening site config file");
+        perror("Failed to open site config file");
         fprintf(stderr, "Could not open site config file: %s. Skipping.\n", filepath);
-        return current_listeners;
+        return NULL;
     }
 
+    SiteConfig *site = (SiteConfig *)malloc(sizeof(SiteConfig));
+    if (site == NULL) {
+        perror("Failed to allocate SiteConfig");
+        fclose(file);
+        return NULL;
+    }
+    memset(site, 0, sizeof(SiteConfig)); // Initialize all members to 0
+
+    site->num_server_names = 0;
+    site->listen_socket_count = 0;
+    site->ssl_ctx = NULL; // Will be created if certs are found
+
     char line[MAX_LINE_SIZE];
-    ListenConfig *last_parsed_listener = NULL;
-
-    bool listen_directive_found_in_this_file = false;
-
     while (fgets(line, sizeof(line), file) != NULL) {
-        line[strcspn(line, "\n")] = 0;
+        char *trimmed_line = line;
+        // Trim leading whitespace
+        while (*trimmed_line == ' ' || *trimmed_line == '\t') {
+            trimmed_line++;
+        }
+        // Remove comments and trailing whitespace
+        char *comment_pos = strchr(trimmed_line, '#');
+        if (comment_pos != NULL) {
+            *comment_pos = '\0';
+        }
+        size_t len = strlen(trimmed_line);
+        while (len > 0 && (trimmed_line[len - 1] == '\n' || trimmed_line[len - 1] == '\r' || trimmed_line[len - 1] == ' ' || trimmed_line[len - 1] == '\t')) {
+            trimmed_line[--len] = '\0';
+        }
 
-        if (line[0] == '#' || line[0] == '\0') {
+        if (len == 0) {
+            continue; // Empty or comment-only line
+        }
+
+        char *line_copy = strdup(trimmed_line); // Use a copy for strtok
+        if (line_copy == NULL) {
+            perror("strdup failed for line_copy in parse_site_file");
+            free_site_config(site);
+            fclose(file);
+            return NULL;
+        }
+
+        char *key = strtok(line_copy, " \t");
+        if (key == NULL) {
+            free(line_copy);
             continue;
         }
 
-        char line_copy[MAX_LINE_SIZE];
-        strncpy(line_copy, line, MAX_LINE_SIZE - 1);
-        line_copy[MAX_LINE_SIZE - 1] = '\0';
+        // Get the rest of the line as value by continuing strtok on the same line_copy
+        char *value = strtok(NULL, ";"); // This will get everything after the key up to ';' or end of line
 
-        char *key = strtok(line_copy, " \t");
-        if (key == NULL) continue;
+        if (value == NULL) {
+            fprintf(stderr, "Warning: Invalid directive format in %s: %s\n", filepath, trimmed_line);
+            free(line_copy);
+            continue;
+        }
+        // Trim leading/trailing whitespace from value
+        while (*value == ' ' || *value == '\t') value++; // Trim leading whitespace
+        len = strlen(value); // Recalculate length after trimming leading
+        while (len > 0 && (value[len - 1] == ' ' || value[len - 1] == '\t')) value[--len] = '\0'; // Trim trailing whitespace
 
-        char *value = strtok(NULL, " \t;");
 
         if (strcmp(key, "listen") == 0) {
-            if (listen_directive_found_in_this_file) {
-                fprintf(stderr, "Error in %s: Only one 'listen' directive is allowed per site file. Skipping subsequent 'listen' directives.\n", filepath);
-                continue;
-            }
-
-            char original_line_for_parse[MAX_LINE_SIZE];
-            strncpy(original_line_for_parse, line, MAX_LINE_SIZE - 1);
-            original_line_for_parse[MAX_LINE_SIZE - 1] = '\0';
-
-            ParsedListenDirectives parsed = parse_single_listen_directive(original_line_for_parse);
-
-            for (int i = 0; i < parsed.count; ++i) {
-                 if ((parsed.configs[i].is_ipv6 && !global_config->ipv6_enabled) ||
-                     (!parsed.configs[i].is_ipv6 && !global_config->ipv4_enabled)) {
-                     fprintf(stderr, "Skipping listener %s port %d from %s due to global IPv%d setting.\n",
-                             parsed.configs[i].address, parsed.configs[i].port, filepath, parsed.configs[i].is_ipv6 ? 6 : 4);
-                     continue;
-                 }
-
-                 if (*current_num_listeners < MAX_LISTEN_SOCKETS) {
-                    ListenConfig *temp = realloc(current_listeners, (*current_num_listeners + 1) * sizeof(ListenConfig));
-                    if (temp == NULL) {
-                        perror("realloc failed during site file parsing");
-                        fclose(file);
-                        return current_listeners;
-                    }
-                    current_listeners = temp;
-                    current_listeners[*current_num_listeners] = parsed.configs[i];
-                    last_parsed_listener = &current_listeners[*current_num_listeners];
-                    (*current_num_listeners)++;
-                    listen_directive_found_in_this_file = true;
-                 } else {
-                     fprintf(stderr, "Warning: Maximum number of listeners (%d) reached. Ignoring subsequent listen directives.\n", MAX_LISTEN_SOCKETS);
-                     break;
-                 }
-            }
-            if (*current_num_listeners >= MAX_LISTEN_SOCKETS) {
-                break;
-            }
-        } 
-		else if(strcmp(key, "ssl_certificate") == 0 ||
-				strcmp(key, "ssl_key") == 0 ||
-				strcmp(key, "ssl_chain") == 0)
-			{ 
-				if (last_parsed_listener != NULL && last_parsed_listener->ssl_enabled) {
-				if (value == NULL) {
-					fprintf(stderr, "Invalid directive format: %s in %s\n", key, filepath);
-					continue;
-				}
-
-				if (strcmp(key, "ssl_certificate") == 0) {
-					strncpy(last_parsed_listener->site_ssl_cert_file, value, PATH_MAX_LEN - 1);
-					last_parsed_listener->site_ssl_cert_file[PATH_MAX_LEN - 1] = '\0';
-				} else if (strcmp(key, "ssl_key") == 0) {
-					strncpy(last_parsed_listener->site_ssl_key_file, value, PATH_MAX_LEN - 1);
-					last_parsed_listener->site_ssl_key_file[PATH_MAX_LEN - 1] = '\0';
-				} else if (strcmp(key, "ssl_chain") == 0) {
-					strncpy(last_parsed_listener->site_ssl_chain_file, value, PATH_MAX_LEN - 1);
-					last_parsed_listener->site_ssl_chain_file[PATH_MAX_LEN - 1] = '\0';
-				} 
-			} 
-		} else if (strcmp(key, "root") == 0) {
-                strncpy(last_parsed_listener->root_dir, value, PATH_MAX_LEN - 1);
-                last_parsed_listener->root_dir[PATH_MAX_LEN - 1] = '\0';
-		} else if (strcmp(key,"server_name")==0)
-		{
-			if (last_parsed_listener != NULL) {
-                // Free any previously allocated server names for this listener
-                if (last_parsed_listener->server_name != NULL) {
-                    for (int j = 0; last_parsed_listener->server_name[j] != NULL; j++) {
-                        free(last_parsed_listener->server_name[j]);
-                    }
-                    free(last_parsed_listener->server_name);
-                    last_parsed_listener->server_name = NULL;
+            if (site->listen_socket_count < MAX_SITE_LISTENERS) {
+                ListenSocketConfig new_listen_config;
+                // Need a mutable copy of value for strtok in parse_listen_value_into_config
+                char *value_copy_for_parse = strdup(value);
+                if (value_copy_for_parse == NULL) {
+                     perror("strdup failed for listen value_copy");
+                     free(line_copy); free_site_config(site); fclose(file); return NULL;
                 }
-
-                // Skip the "server_name" keyword itself from the original line
-                char *server_names_str = strstr(line, key);
-
-                if (server_names_str != NULL) {
-                    server_names_str += strlen(key); // Move past "server_name"
-                    server_names_str += strspn(server_names_str, " \t"); // Move past whitespace
-
-                    // Count the number of server names
-                    int name_count = 0;
-                    char *temp_str = strdup(server_names_str); // Duplicate to tokenize
-                    if (temp_str == NULL) {
-                        perror("strdup failed");
-                        fclose(file);
-                        return current_listeners;
+                if (parse_listen_value_into_config(value_copy_for_parse, &new_listen_config)) { // Changed function call
+                    // Check global IPv4/IPv6 settings
+                    if ((new_listen_config.family == AF_INET6 && !global_config->ipv6_enabled) ||
+                        (new_listen_config.family == AF_INET && !global_config->ipv4_enabled)) {
+                        fprintf(stderr, "Skipping listen directive '%s' in %s due to global IPv%d setting.\n",
+                                trimmed_line, filepath, (new_listen_config.family == AF_INET6 ? 6 : 4));
+                    } else {
+                        site->listen_sockets[site->listen_socket_count++] = new_listen_config;
                     }
-                    char *token = strtok(temp_str, " \t;");
-                    while (token != NULL) {
-                        name_count++;
-                        token = strtok(NULL, " \t;");
-                    }
-                    free(temp_str); // Free the duplicated string
-
-                    // Allocate memory for the array of server name pointers
-                    last_parsed_listener->server_name = malloc((name_count + 1) * sizeof(char*));
-                    if (last_parsed_listener->server_name == NULL) {
-                        perror("malloc failed for server_name pointers");
-                        fclose(file);
-                        return current_listeners;
-                    }
-
-                    // Populate the array with server names
-                    int current_name_idx = 0;
-                    temp_str = strdup(server_names_str); // Duplicate again for actual parsing
-                    if (temp_str == NULL) {
-                        perror("strdup failed");
-                        // Clean up partially allocated server_name array
-                        for(int j=0; j < current_name_idx; j++) {
-                            free(last_parsed_listener->server_name[j]);
-                        }
-                        free(last_parsed_listener->server_name);
-                        last_parsed_listener->server_name = NULL;
-                        fclose(file);
-                        return current_listeners;
-                    }
-                    token = strtok(temp_str, " \t;");
-                    while (token != NULL && current_name_idx < name_count) {
-                        last_parsed_listener->server_name[current_name_idx] = strdup(token);
-                        if (last_parsed_listener->server_name[current_name_idx] == NULL) {
-                            perror("strdup failed for individual server_name");
-                            // Clean up
-                            for(int j=0; j <= current_name_idx; j++) { // <= to free current token if it was allocated
-                                free(last_parsed_listener->server_name[j]);
-                            }
-                            free(last_parsed_listener->server_name);
-                            last_parsed_listener->server_name = NULL;
-                            free(temp_str);
-                            fclose(file);
-                            return current_listeners;
-                        }
-                        current_name_idx++;
-                        token = strtok(NULL, " \t;");
-                    }
-                    last_parsed_listener->server_name[name_count] = NULL; // Null-terminate the array
-
-                    free(temp_str); // Free the duplicated string
+                } else {
+                    fprintf(stderr, "Error parsing listen directive: %s in %s\n", value, filepath);
                 }
-				
+                free(value_copy_for_parse);
             } else {
-                fprintf(stderr, "Warning: 'server_name' directive found before any 'listen' directive in %s. Ignoring.\n", filepath);
+                fprintf(stderr, "Warning: Too many listen directives for site %s, max %d. Ignoring: %s\n", filepath, MAX_SITE_LISTENERS, trimmed_line);
             }
-		}
-		
-		else {
-            fprintf(stderr, "Warning: Unhandled directive outside of 'listen' block or without a preceding listen directive: %s in %s\n", line, filepath);
+        } else if (strcmp(key, "server_name") == 0) {
+            // Free previous server_name if re-defined
+            if (site->server_name != NULL) {
+                for (int i = 0; i < site->num_server_names; ++i) {
+                    free(site->server_name[i]);
+                }
+                free(site->server_name);
+                site->server_name = NULL;
+                site->num_server_names = 0;
+            }
+
+            // Count tokens first to allocate array size
+            char *temp_value_copy = strdup(value);
+            if (temp_value_copy == NULL) { perror("strdup failed for server_name count copy"); free(line_copy); free_site_config(site); fclose(file); return NULL; }
+            int count = 0;
+            char *token = strtok(temp_value_copy, " \t");
+            while (token != NULL) {
+                count++;
+                token = strtok(NULL, " \t");
+            }
+            free(temp_value_copy);
+
+            site->server_name = (char**)malloc(count * sizeof(char*));
+            if (site->server_name == NULL) { perror("malloc failed for server_name pointers"); free(line_copy); free_site_config(site); fclose(file); return NULL; }
+            site->num_server_names = 0;
+
+            char *token_value_copy = strdup(value); // Another copy for actual tokenizing
+            if (token_value_copy == NULL) { perror("strdup failed for server_name parse copy"); free(line_copy); free_site_config(site); fclose(file); return NULL; }
+
+            token = strtok(token_value_copy, " \t");
+            while (token != NULL && site->num_server_names < count) {
+                site->server_name[site->num_server_names] = strdup(token);
+                if (site->server_name[site->num_server_names] == NULL) {
+                    perror("strdup failed for individual server_name token");
+                    // Clean up partially allocated server_name array
+                    for(int i = 0; i < site->num_server_names; ++i) free(site->server_name[i]);
+                    free(site->server_name);
+                    site->server_name = NULL;
+                    free(token_value_copy); free(line_copy); free_site_config(site); fclose(file); return NULL;
+                }
+                site->num_server_names++;
+                token = strtok(NULL, " \t");
+            }
+            free(token_value_copy);
+        } else if (strcmp(key, "root") == 0) {
+            strncpy(site->root_dir, value, PATH_MAX_LEN - 1);
+            site->root_dir[PATH_MAX_LEN - 1] = '\0';
+        } else if (strcmp(key, "ssl_certificate") == 0) {
+            strncpy(site->site_ssl_cert_file, value, PATH_MAX_LEN - 1);
+            site->site_ssl_cert_file[PATH_MAX_LEN - 1] = '\0';
+        } else if (strcmp(key, "ssl_key") == 0) {
+            strncpy(site->site_ssl_key_file, value, PATH_MAX_LEN - 1);
+            site->site_ssl_key_file[PATH_MAX_LEN - 1] = '\0';
+        } else if (strcmp(key, "ssl_chain") == 0) {
+            strncpy(site->site_ssl_chain_file, value, PATH_MAX_LEN - 1);
+            site->site_ssl_chain_file[PATH_MAX_LEN - 1] = '\0';
+        } else {
+            fprintf(stderr, "Warning: Unhandled directive '%s' in file %s\n", key, filepath);
+        }
+        free(line_copy);
+    }
+    fclose(file);
+
+    // If no server_name was specified, default to "_"
+    if (site->num_server_names == 0) {
+        site->server_name = (char**)malloc(sizeof(char*));
+        if (site->server_name == NULL) { perror("malloc failed for default server_name"); free_site_config(site); return NULL; }
+        site->server_name[0] = strdup("_");
+        if (site->server_name[0] == NULL) { perror("strdup failed for default server_name"); free_site_config(site); return NULL; }
+        site->num_server_names = 1;
+    }
+
+    // Load SSL_CTX for the site if certificate paths are present
+    if (strlen(site->site_ssl_cert_file) > 0 && strlen(site->site_ssl_key_file) > 0) {
+        site->ssl_ctx = create_ssl_context(site->site_ssl_cert_file, site->site_ssl_key_file, site->site_ssl_chain_file);
+        if (site->ssl_ctx == NULL) {
+            fprintf(stderr, "Error loading SSL context for site from %s. Make sure certificate files exist and are valid.\n", filepath);
+            // Optionally, set a flag or disable site if SSL context fails to load
         }
     }
 
-    fclose(file);
-	//printf("Parsed %d listeners from %s\n", *current_num_listeners, filepath);
-	printf("Current listeners:\n");
-	for (int i = 0; i < *current_num_listeners; i++) {
-
-		// set default server_name if not set
-		if (current_listeners[i].server_name == NULL) {
-					current_listeners[i].server_name = malloc(1 * sizeof(char*));
-					current_listeners[i].server_name[0] = "_"; // No server names specified
-		}
-
-		printf("Listener %d: %s:%d, SSL: %s, Root: %s\n", i + 1,
-			   current_listeners[i].address,
-			   current_listeners[i].port,
-			   current_listeners[i].ssl_enabled ? "Enabled" : "Disabled",
-			   current_listeners[i].root_dir);
-		if (current_listeners[i].server_name != NULL) {
-			printf("Listener %d Server Names: ",i+1);
-			for (int j = 0; current_listeners[i].server_name[j] != NULL; j++) {
-				printf("%s,", current_listeners[i].server_name[j]);
-			}
-			printf("\n");
-		}
-		else{
-			printf("Listener %d Server Names: <None>\n", i + 1);
-		}
-	}
-	printf("-----------------------\n");
-
-    return current_listeners;
+    return site;
 }
 
-
-// Function to read configuration from all site files in a directory
-ListenConfig* read_all_site_configs(const char *sitedir_path, const GlobalConfig *global_config, int *num_listeners) {
-    DIR *dir;
-    struct dirent *entry;
-    struct stat file_stat;
+// Function to read all site configurations from a directory
+// This function now populates the global_listeners structure
+void read_all_site_configs(const char *sites_dir_path, GlobalConfig *global_config, GlobalListenConfig *global_listeners_ptr) {
+    DIR *d;
+    struct dirent *dir;
     char filepath[PATH_MAX_LEN];
 
-    ListenConfig *listeners = NULL;
-    *num_listeners = 0;
-
-    if ((dir = opendir(sitedir_path)) == NULL) {
-        perror("Error opening site configuration directory");
-        fprintf(stderr, "Could not open site configuration directory: %s. Using default listener based on global config.\n", sitedir_path);
-         listeners = malloc(2 * sizeof(ListenConfig));
-        if (listeners == NULL) {
-             perror("malloc failed for default listeners");
-             *num_listeners = 0;
-             return NULL;
-        }
-
-        int default_count = 0;
-        if (global_config->ipv4_enabled) {
-            listeners[default_count].port = 8080;
-            strcpy(listeners[default_count].address, "0.0.0.0");
-            listeners[default_count].is_ipv6 = false;
-            listeners[default_count].ssl_enabled = false;
-            listeners[default_count].ssl_ctx = NULL;
-            listeners[default_count].site_ssl_cert_file[0] = '\0';
-            listeners[default_count].site_ssl_key_file[0] = '\0';
-            listeners[default_count].site_ssl_chain_file[0] = '\0';
-			listeners[default_count].root_dir[0] = '\0'; // Default root directory
-            default_count++;
-        }
-         if (global_config->ipv6_enabled) {
-            listeners[default_count].port = 8080;
-            strcpy(listeners[default_count].address, "::");
-            listeners[default_count].is_ipv6 = true;
-            listeners[default_count].ssl_enabled = false;
-            listeners[default_count].ssl_ctx = NULL;
-            listeners[default_count].site_ssl_cert_file[0] = '\0';
-            listeners[default_count].site_ssl_key_file[0] = '\0';
-            listeners[default_count].site_ssl_chain_file[0] = '\0';
-			listeners[default_count].root_dir[0] = '\0'; // Default root directory
-            default_count++;
-        }
-        *num_listeners = default_count;
-
-         if (*num_listeners == 0) {
-             fprintf(stderr, "Global configuration disables both IPv4 and IPv6. No listeners configured.\n");
-             free(listeners);
-             return NULL;
-         }
-
-        return listeners;
+    d = opendir(sites_dir_path);
+    if (!d) {
+        perror("Failed to open sites-enabled directory");
+        return;
     }
 
-    while ((entry = readdir(dir)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+    // First pass: Parse all site config files into a temporary array
+    num_total_parsed_sites = 0;
+    while ((dir = readdir(d)) != NULL) {
+        if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0) {
             continue;
         }
 
-        if (snprintf(filepath, sizeof(filepath), "%s/%s", sitedir_path, entry->d_name) >= sizeof(filepath)) {
-             fprintf(stderr, "Error: File path too long for %s/%s. Skipping.\n", sitedir_path, entry->d_name);
+        snprintf(filepath, sizeof(filepath), "%s/%s", sites_dir_path, dir->d_name);
+
+        struct stat st;
+        if (stat(filepath, &st) == -1 || !S_ISREG(st.st_mode)) {
+            continue; // Skip directories and non-regular files
+        }
+
+        SiteConfig *site = parse_site_file(filepath, global_config);
+        if (site != NULL) {
+            if (num_total_parsed_sites < (sizeof(all_parsed_sites) / sizeof(all_parsed_sites[0]))) {
+                all_parsed_sites[num_total_parsed_sites++] = site;
+            } else {
+                fprintf(stderr, "Warning: Max parsed sites capacity reached. Ignoring %s\n", filepath);
+                free_site_config(site); // Free if not stored
+            }
+        }
+    }
+    closedir(d);
+
+    if (num_total_parsed_sites == 0) {
+        fprintf(stderr, "No site configurations found in '%s'.\n", sites_dir_path);
+        return;
+    }
+
+    // Second pass: Aggregate SiteConfigs into GlobalListenConfig
+    // This handles port reuse by associating multiple sites with a single ListenSocket
+    global_listeners_ptr->count = 0;
+    for (int i = 0; i < num_total_parsed_sites; ++i) {
+        SiteConfig *current_site = all_parsed_sites[i];
+
+        if (current_site->listen_socket_count == 0) {
+            fprintf(stderr, "Warning: Site '%s' (root: %s) has no 'listen' directives. It will not be served.\n", filepath, current_site->root_dir);
+            continue;
+        }
+
+        for (int j = 0; j < current_site->listen_socket_count; ++j) {
+            ListenSocketConfig *site_listen_cfg = &current_site->listen_sockets[j];
+            bool found_existing_listener = false;
+
+            // Check if this (address, port, ssl_enabled, family) listener already exists
+            for (int k = 0; k < global_listeners_ptr->count; ++k) {
+                ListenSocket *existing_ls = &global_listeners_ptr->sockets[k];
+                if (strcmp(existing_ls->config.address, site_listen_cfg->address) == 0 &&
+                    existing_ls->config.port == site_listen_cfg->port &&
+                    existing_ls->config.ssl_enabled == site_listen_cfg->ssl_enabled &&
+                    existing_ls->config.family == site_listen_cfg->family) {
+
+                    // Found existing listener, add this site to its sites array
+                    if (existing_ls->site_count < MAX_SITES_PER_LISTENER) {
+                        existing_ls->sites = (SiteConfig**)realloc(existing_ls->sites, (existing_ls->site_count + 1) * sizeof(SiteConfig*));
+                        if (existing_ls->sites == NULL) { perror("realloc failed for existing listener sites"); exit(EXIT_FAILURE); }
+                        existing_ls->sites[existing_ls->site_count++] = current_site;
+                        found_existing_listener = true;
+                    } else {
+                        fprintf(stderr, "Warning: Listener %s:%d (SSL: %s) reached max sites (%d). Ignoring site from %s.\n",
+                                site_listen_cfg->address, site_listen_cfg->port, site_listen_cfg->ssl_enabled ? "true" : "false",
+                                MAX_SITES_PER_LISTENER, filepath);
+                    }
+                    break;
+                }
+            }
+
+            if (!found_existing_listener) {
+                // Create a new ListenSocket
+                if (global_listeners_ptr->count >= MAX_LISTEN_SOCKETS) {
+                    fprintf(stderr, "Error: Max unique listen sockets (%d) reached. Cannot add more listeners.\n", MAX_LISTEN_SOCKETS);
+                    continue;
+                }
+                ListenSocket *new_ls = &global_listeners_ptr->sockets[global_listeners_ptr->count];
+                memset(new_ls, 0, sizeof(ListenSocket)); // Initialize new_ls
+                new_ls->config = *site_listen_cfg; // Copy the ListenSocketConfig
+                new_ls->sites = (SiteConfig**)malloc(sizeof(SiteConfig*)); // Allocate for first site
+                if (new_ls->sites == NULL) { perror("malloc failed for new listener sites"); exit(EXIT_FAILURE); }
+                new_ls->sites[0] = current_site;
+                new_ls->site_count = 1;
+
+                // Initialize listener-level SSL_CTX if SSL enabled
+                if (new_ls->config.ssl_enabled) {
+                    // This listener-level SSL_CTX primarily manages SNI callbacks.
+                    // It doesn't load specific certs from files; those are in SiteConfig.ssl_ctx.
+                    new_ls->listener_ssl_ctx = SSL_CTX_new(TLS_server_method());
+                    if (new_ls->listener_ssl_ctx == NULL) {
+                        ERR_print_errors_fp(stderr);
+                        fprintf(stderr, "Error creating listener SSL_CTX for %s:%d\n", new_ls->config.address, new_ls->config.port);
+                        new_ls->config.ssl_enabled = false; // Disable SSL for this listener if context creation fails
+                    } else {
+                        // Set the SNI callback for this listener. The 'arg' will be a pointer to this ListenSocket.
+                        SSL_CTX_set_tlsext_servername_callback(new_ls->listener_ssl_ctx, sni_callback);
+                        SSL_CTX_set_tlsext_servername_arg(new_ls->listener_ssl_ctx, new_ls);
+                    }
+                }
+
+                global_listeners_ptr->count++;
+            }
+        }
+    }
+}
+
+
+// Function to create an SSL context (for a SiteConfig's specific certificate)
+SSL_CTX *create_ssl_context(const char *cert_file, const char *key_file, const char *chain_file) {
+    SSL_CTX *ctx;
+
+    // Initialize SSL library if not already (redundant if main does it, but safer)
+    SSL_library_init();
+    SSL_load_error_strings();
+    // ERR_load_BIO_strings(); // Deprecated in OpenSSL 3.0, removed
+    OpenSSL_add_all_algorithms();
+
+    // Use TLS_server_method for general purpose server SSL/TLS
+    ctx = SSL_CTX_new(TLS_server_method());
+    if (ctx == NULL) {
+        ERR_print_errors_fp(stderr);
+        return NULL;
+    }
+
+    // Load server certificate
+    if (SSL_CTX_use_certificate_file(ctx, cert_file, SSL_FILETYPE_PEM) <= 0) {
+        ERR_print_errors_fp(stderr);
+        SSL_CTX_free(ctx);
+        return NULL;
+    }
+
+    // Load private key
+    if (SSL_CTX_use_PrivateKey_file(ctx, key_file, SSL_FILETYPE_PEM) <= 0) {
+        ERR_print_errors_fp(stderr);
+        SSL_CTX_free(ctx);
+        return NULL;
+    }
+
+    // Verify private key
+    if (!SSL_CTX_check_private_key(ctx)) {
+        fprintf(stderr, "Private key does not match the public certificate\n");
+        SSL_CTX_free(ctx);
+        return NULL;
+    }
+
+    // Load certificate chain if provided
+    if (chain_file != NULL && strlen(chain_file) > 0) {
+        if (SSL_CTX_use_certificate_chain_file(ctx, chain_file) <= 0) {
+            ERR_print_errors_fp(stderr);
+            fprintf(stderr, "Warning: Could not load certificate chain file %s\n", chain_file);
+            // This might not be a fatal error, depending on policy
+        }
+    }
+
+    // Recommended security options (disable old, insecure protocols)
+    SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1);
+    // Use SSL_CTX_set_cipher_list for setting ciphers for TLSv1.2 and earlier
+    if (SSL_CTX_set_cipher_list(ctx, "HIGH:!aNULL:!kRSA:!PSK:!SRP:!DSS:!RC4:!MD5:!EXP:!LOW:!NULL:!eNULL:!DES:!3DES:!ADH:!AECDH") <= 0) {
+        ERR_print_errors_fp(stderr);
+        fprintf(stderr, "Error setting cipher list.\n");
+        SSL_CTX_free(ctx);
+        return NULL;
+    }
+
+    return ctx;
+}
+
+// Function to free allocated SiteConfig memory
+void free_site_config(SiteConfig *site) {
+    if (site == NULL) return;
+
+    if (site->server_name != NULL) {
+        for (int i = 0; i < site->num_server_names; ++i) {
+            if (site->server_name[i] != NULL) {
+                free(site->server_name[i]);
+            }
+        }
+        free(site->server_name);
+    }
+    if (site->ssl_ctx) {
+        SSL_CTX_free(site->ssl_ctx);
+    }
+    free(site);
+}
+
+// Function to free allocated ListenSocket memory
+void free_listen_socket(ListenSocket *ls) {
+    if (ls == NULL) return;
+    if (ls->sites) {
+        // Only free the array of pointers, not the SiteConfig themselves
+        // because SiteConfigs are managed by all_parsed_sites array
+        free(ls->sites);
+    }
+    if (ls->listener_ssl_ctx) {
+        SSL_CTX_free(ls->listener_ssl_ctx);
+    }
+    // Note: sock_fd is closed in main loop, not here
+}
+
+// Function to free all global ListenSocket and SiteConfig memory
+void free_global_listeners(GlobalListenConfig *listeners) {
+    for (int i = 0; i < listeners->count; ++i) {
+        free_listen_socket(&listeners->sockets[i]);
+    }
+    // Free all SiteConfig objects that were parsed
+    for (int i = 0; i < num_total_parsed_sites; ++i) {
+        free_site_config(all_parsed_sites[i]);
+    }
+    num_total_parsed_sites = 0; // Reset count
+}
+
+
+// Function to parse global configuration settings (e.g., worker user, IPv4/IPv6 enabled)
+void parse_global_config(const char *filepath, GlobalConfig *config) {
+    FILE *file = fopen(filepath, "r");
+    if (file == NULL) {
+        perror("Error opening global config file");
+        fprintf(stderr, "Could not open global config file: %s. Using default settings.\n", filepath);
+        return; // Use default values
+    }
+
+    char line[MAX_LINE_SIZE];
+    config->specified = true; // Mark that a config file was processed
+
+    while (fgets(line, sizeof(line), file) != NULL) {
+        char *trimmed_line = line;
+        while (*trimmed_line == ' ' || *trimmed_line == '\t') trimmed_line++;
+        char *comment_pos = strchr(trimmed_line, '#');
+        if (comment_pos != NULL) *comment_pos = '\0';
+        size_t len = strlen(trimmed_line);
+        while (len > 0 && (trimmed_line[len - 1] == '\n' || trimmed_line[len - 1] == '\r' || trimmed_line[len - 1] == ' ' || trimmed_line[len - 1] == '\t')) trimmed_line[--len] = '\0';
+        if (len == 0) continue;
+
+        char *line_copy = strdup(trimmed_line);
+        if (line_copy == NULL) { perror("strdup failed"); fclose(file); return; }
+        char *key = strtok(line_copy, " \t");
+        if (key == NULL) { free(line_copy); continue; }
+        char *value = strtok(NULL, ";");
+        if (value == NULL) { fprintf(stderr, "Warning: Invalid directive format: %s\n", trimmed_line); free(line_copy); continue; }
+        while (*value == ' ' || *value == '\t') value++;
+
+        if (strcmp(key, "ipv4") == 0) {
+            config->ipv4_enabled = (strcmp(value, "on") == 0);
+        } else if (strcmp(key, "ipv6") == 0) {
+            config->ipv6_enabled = (strcmp(value, "on") == 0);
+        } else if (strcmp(key, "worker_user") == 0) {
+            strncpy(config->worker_user, value, MAX_LINE_SIZE - 1);
+            config->worker_user[MAX_LINE_SIZE - 1] = '\0';
+        } else {
+            fprintf(stderr, "Warning: Unhandled global config directive: %s\n", trimmed_line);
+        }
+        free(line_copy);
+    }
+    fclose(file);
+}
+
+
+// --- Main Function ---
+int main(int argc, char *argv[]) {
+    // Initialize OpenSSL library (should be done once at application startup)
+    SSL_library_init();
+    SSL_load_error_strings();
+    // OpenSSL_add_all_algorithms(); // Not strictly necessary with newer OpenSSL for general use
+
+    // --- Global Config Parsing ---
+    GlobalConfig global_config = {true, true, "nobody", false}; // Default values
+
+    char global_config_filepath[PATH_MAX_LEN];
+    if (argc > 1) {
+        strncpy(global_config_filepath, argv[1], PATH_MAX_LEN - 1);
+        global_config_filepath[PATH_MAX_LEN - 1] = '\0';
+    } else {
+        strncpy(global_config_filepath, GLOBAL_CONFIG_PATH, PATH_MAX_LEN - 1);
+        global_config_filepath[PATH_MAX_LEN - 1] = '\0';
+    }
+    parse_global_config(global_config_filepath, &global_config);
+
+    // --- Read All Site Configurations and Build Global Listeners ---
+    GlobalListenConfig current_global_listeners;
+    memset(&current_global_listeners, 0, sizeof(GlobalListenConfig)); // Initialize it
+    read_all_site_configs(SITES_DIR_PATH, &global_config, &current_global_listeners);
+
+    if (current_global_listeners.count == 0) {
+        fprintf(stderr, "No active listeners configured. Exiting.\n");
+        return EXIT_FAILURE;
+    }
+
+    // --- Drop Privileges ---
+    if (global_config.specified && strlen(global_config.worker_user) > 0) {
+        struct passwd *pw = getpwnam(global_config.worker_user);
+        if (pw) {
+            if (setgid(pw->pw_gid) != 0) {
+                perror("setgid failed");
+                return EXIT_FAILURE;
+            }
+            if (setuid(pw->pw_uid) != 0) {
+                perror("setuid failed");
+                return EXIT_FAILURE;
+            }
+            printf("Dropped privileges to user '%s' (UID: %d, GID: %d)\n",
+                   global_config.worker_user, (int)pw->pw_uid, (int)pw->pw_gid);
+        } else {
+            fprintf(stderr, "Warning: Worker user '%s' not found. Running as current user.\n", global_config.worker_user);
+        }
+    } else {
+        // Fallback to nobody if no user specified or config not found
+        // Make sure nobody user exists (UID 65534 on many Linux systems)
+        if (setgid(65534) != 0) { perror("setgid failed for nobody"); /* not critical */ }
+        if (setuid(65534) != 0) { perror("setuid failed for nobody"); /* not critical */ }
+        printf("Dropped privileges to user 'nobody' (UID: 65534, GID: 65534) (fallback)\n");
+    }
+
+    // --- Create and Bind Sockets ---
+    struct pollfd *poll_fds = calloc(current_global_listeners.count, sizeof(struct pollfd));
+    if (poll_fds == NULL) { perror("calloc failed for poll_fds"); return EXIT_FAILURE; }
+
+    // Store socket FDs directly in ListenSocket for easier cleanup
+    for (int i = 0; i < current_global_listeners.count; ++i) {
+        ListenSocket *current_ls = &current_global_listeners.sockets[i];
+        int sock_fd = -1;
+        int opt = 1;
+
+        if (current_ls->config.family == AF_INET) {
+            sock_fd = socket(AF_INET, SOCK_STREAM, 0);
+            if (sock_fd == -1) { perror("IPv4 socket creation failed"); current_ls->sock_fd = -1; continue; }
+
+            if (setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+                perror("setsockopt SO_REUSEADDR failed for IPv4"); close(sock_fd); current_ls->sock_fd = -1; continue;
+            }
+            if (setsockopt(sock_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)) < 0) { // Enable SO_REUSEPORT for true port reuse
+                perror("setsockopt SO_REUSEPORT failed for IPv4"); close(sock_fd); current_ls->sock_fd = -1; continue;
+            }
+
+            struct sockaddr_in server_addr_in;
+            memset(&server_addr_in, 0, sizeof(server_addr_in));
+            server_addr_in.sin_family = AF_INET;
+            server_addr_in.sin_port = htons(current_ls->config.port);
+            if (inet_pton(AF_INET, current_ls->config.address, &server_addr_in.sin_addr) <= 0) {
+                perror("Invalid IPv4 address for pton"); close(sock_fd); current_ls->sock_fd = -1; continue;
+            }
+
+            if (bind(sock_fd, (struct sockaddr *)&server_addr_in, sizeof(server_addr_in)) < 0) {
+                perror("IPv4 bind failed"); close(sock_fd); current_ls->sock_fd = -1; continue;
+            }
+            printf("Listening on %s:%d %s (Socket FD: %d)\n", current_ls->config.address, current_ls->config.port,
+                   current_ls->config.ssl_enabled ? "SSL" : "HTTP", sock_fd);
+
+        } else if (current_ls->config.family == AF_INET6) {
+            sock_fd = socket(AF_INET6, SOCK_STREAM, 0);
+            if (sock_fd == -1) { perror("IPv6 socket creation failed"); current_ls->sock_fd = -1; continue; }
+
+            if (setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+                perror("setsockopt SO_REUSEADDR failed for IPv6"); close(sock_fd); current_ls->sock_fd = -1; continue;
+            }
+            if (setsockopt(sock_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)) < 0) { // Enable SO_REUSEPORT for true port reuse
+                perror("setsockopt SO_REUSEPORT failed for IPv6"); close(sock_fd); current_ls->sock_fd = -1; continue;
+            }
+            // For IPv6, explicitly disable IPv4-mapped addresses if not requested
+            // int v6only = 1;
+            // if (setsockopt(sock_fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only)) < 0) {
+            //     perror("setsockopt IPV6_V6ONLY failed"); close(sock_fd); current_ls->sock_fd = -1; continue;
+            // }
+
+            struct sockaddr_in6 server_addr_in6;
+            memset(&server_addr_in6, 0, sizeof(server_addr_in6));
+            server_addr_in6.sin6_family = AF_INET6;
+            server_addr_in6.sin6_port = htons(current_ls->config.port);
+            if (inet_pton(AF_INET6, current_ls->config.address, &server_addr_in6.sin6_addr) <= 0) {
+                perror("Invalid IPv6 address for pton"); close(sock_fd); current_ls->sock_fd = -1; continue;
+            }
+
+            if (bind(sock_fd, (struct sockaddr *)&server_addr_in6, sizeof(server_addr_in6)) < 0) {
+                perror("IPv6 bind failed"); close(sock_fd); current_ls->sock_fd = -1; continue;
+            }
+            printf("Listening on [%s]:%d %s (Socket FD: %d)\n", current_ls->config.address, current_ls->config.port,
+                   current_ls->config.ssl_enabled ? "SSL" : "HTTP", sock_fd);
+        } else {
+             fprintf(stderr, "Unknown address family for listener at index %d.\n", i);
+             current_ls->sock_fd = -1;
              continue;
         }
 
-
-        if (stat(filepath, &file_stat) == -1) {
-            perror("Error getting file status");
-            fprintf(stderr, "Could not get status of %s. Skipping.\n", filepath);
-            continue;
+        if (listen(sock_fd, 50) < 0) { // Max 50 pending connections
+            perror("listen failed"); close(sock_fd); current_ls->sock_fd = -1; continue;
         }
 
-        if (S_ISREG(file_stat.st_mode)) {
-            listeners = parse_site_file(filepath, global_config, listeners, num_listeners);
-             if (listeners == NULL && *num_listeners > 0) {
-                 fprintf(stderr, "Memory reallocation failed during site config parsing. Stopping.\n");
-                 break;
-             }
+        current_ls->sock_fd = sock_fd; // Store the actual socket FD in the ListenSocket struct
+        poll_fds[i].fd = sock_fd;
+        poll_fds[i].events = POLLIN;
+
+        // Print site info associated with this listener for debugging
+        printf("  Associated Sites (%d): \n", current_ls->site_count);
+        for(int s_idx = 0; s_idx < current_ls->site_count; ++s_idx) {
+            printf("    - Root: %s, Server Names: ", current_ls->sites[s_idx]->root_dir);
+            for(int sn_idx = 0; sn_idx < current_ls->sites[s_idx]->num_server_names; ++sn_idx) {
+                printf("%s%s", current_ls->sites[s_idx]->server_name[sn_idx], (sn_idx == current_ls->sites[s_idx]->num_server_names - 1) ? "" : ",");
+            }
+            printf("\n");
         }
+        printf("--------------------------------------------------\n");
     }
 
-    closedir(dir);
-
-     if (*num_listeners == 0) {
-         fprintf(stderr, "No valid listen directives found in site configuration directory %s (or all disabled by global config). Using default listener based on global config.\n", sitedir_path);
-        listeners = malloc(2 * sizeof(ListenConfig));
-        if (listeners == NULL) {
-             perror("malloc failed for default listeners");
-             *num_listeners = 0;
-             return NULL;
-        }
-
-        int default_count = 0;
-        if (global_config->ipv4_enabled) {
-            listeners[default_count].port = 8080;
-            strcpy(listeners[default_count].address, "0.0.0.0");
-            listeners[default_count].is_ipv6 = false;
-            listeners[default_count].ssl_enabled = false;
-            listeners[default_count].ssl_ctx = NULL;
-            listeners[default_count].site_ssl_cert_file[0] = '\0';
-            listeners[default_count].site_ssl_key_file[0] = '\0';
-            listeners[default_count].site_ssl_chain_file[0] = '\0';
-            default_count++;
-        }
-         if (global_config->ipv6_enabled) {
-            listeners[default_count].port = 8080;
-            strcpy(listeners[default_count].address, "::");
-            listeners[default_count].is_ipv6 = true;
-            listeners[default_count].ssl_enabled = false;
-            listeners[default_count].ssl_ctx = NULL;
-            listeners[default_count].site_ssl_cert_file[0] = '\0';
-            listeners[default_count].site_ssl_key_file[0] = '\0';
-            listeners[default_count].site_ssl_chain_file[0] = '\0';
-            default_count++;
-        }
-        *num_listeners = default_count;
-
-        if (*num_listeners == 0) {
-             fprintf(stderr, "Global configuration disables both IPv4 and IPv6. No listeners configured.\n");
-             free(listeners);
-             return NULL;
-         }
-    }
-
-    return listeners;
-}
-
-
-int main() {
-    int opt = 1;
-
-    // --- OpenSSL Initialization ---
-    SSL_library_init();
-    SSL_load_error_strings();
-    OpenSSL_add_all_algorithms();
-    // --- End OpenSSL Initialization ---
-
-
-    GlobalConfig global_config = read_global_config(GLOBAL_CONFIG_PATH);
-
-    int num_listeners = 0;
-    ListenConfig *listen_configs = read_all_site_configs(SITES_DIR_PATH, &global_config, &num_listeners);
-
-    if (listen_configs == NULL || num_listeners == 0) {
-        fprintf(stderr, "Failed to configure any listeners. Exiting.\n");
-        free(listen_configs);
-        EVP_cleanup();
-        ERR_free_strings();
-        exit(EXIT_FAILURE);
-    }
-
-    int *listen_sockets = malloc(num_listeners * sizeof(int));
-    if (listen_sockets == NULL) {
-        perror("malloc failed for listen sockets");
-         for (int i = 0; i < num_listeners; i++) {
-             if (listen_configs[i].ssl_ctx) SSL_CTX_free(listen_configs[i].ssl_ctx);
-         }
-        free(listen_configs);
-        EVP_cleanup();
-        ERR_free_strings();
-        exit(EXIT_FAILURE);
-    }
-
-    SSL_CTX **listener_ssl_ctxs = malloc(num_listeners * sizeof(SSL_CTX *));
-     if (listener_ssl_ctxs == NULL) {
-         perror("malloc failed for listener SSL contexts array");
-         for (int i = 0; i < num_listeners; i++) {
-             if (listen_configs[i].ssl_ctx) SSL_CTX_free(listen_configs[i].ssl_ctx);
-         }
-         free(listen_configs);
-         free(listen_sockets);
-         EVP_cleanup();
-         ERR_free_strings();
-         exit(EXIT_FAILURE);
-     }
-
-
-    struct pollfd *poll_fds = malloc(num_listeners * sizeof(struct pollfd));
-     if (poll_fds == NULL) {
-        perror("malloc failed for poll fds");
-         for (int i = 0; i < num_listeners; i++) {
-             if (listen_configs[i].ssl_ctx) SSL_CTX_free(listen_configs[i].ssl_ctx);
-         }
-        free(listen_configs);
-        free(listen_sockets);
-        free(listener_ssl_ctxs);
-        EVP_cleanup();
-        ERR_free_strings();
-        exit(EXIT_FAILURE);
-    }
-
-    int actual_listeners_count = 0;
-    for (int i = 0; i < num_listeners; i++) {
-        int server_fd;
-        socklen_t addrlen;
-
-        if (listen_configs[i].is_ipv6) {
-            server_fd = socket(AF_INET6, SOCK_STREAM, 0);
-            addrlen = sizeof(struct sockaddr_in6);
+    // Filter out failed sockets from poll_fds
+    int active_listeners_count = 0;
+    for(int i = 0; i < current_global_listeners.count; ++i) {
+        if (current_global_listeners.sockets[i].sock_fd != -1) {
+            poll_fds[active_listeners_count] = (struct pollfd){
+                .fd = current_global_listeners.sockets[i].sock_fd,
+                .events = POLLIN,
+                .revents = 0
+            };
+            active_listeners_count++;
         } else {
-            server_fd = socket(AF_INET, SOCK_STREAM, 0);
-            addrlen = sizeof(struct sockaddr_in);
-        }
-
-        if (server_fd == -1) {
-            perror("socket failed");
-            fprintf(stderr, "Could not create socket for %s port %d\n", listen_configs[i].address, listen_configs[i].port);
-            listen_sockets[i] = -1;
-            continue;
-        }
-
-        if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) {
-            perror("setsockopt failed for listener");
-            fprintf(stderr, "Could not set socket options for %s port %d\n", listen_configs[i].address, listen_configs[i].port);
-            close(server_fd);
-             listen_sockets[i] = -1;
-            continue;
-        }
-
-        if (listen_configs[i].is_ipv6) {
-             int on = 1;
-             if (setsockopt(server_fd, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof(on)) < 0) {
-                 perror("Warning: setsockopt(IPV6_V6ONLY) failed");
-             }
-        }
-
-        // --- SSL Context Setup for SSL Listeners ---
-        if (listen_configs[i].ssl_enabled) {
-            listen_configs[i].ssl_ctx = SSL_CTX_new(TLS_server_method());
-            if (listen_configs[i].ssl_ctx == NULL) {
-                ERR_print_errors_fp(stderr);
-                fprintf(stderr, "Error creating SSL context for %s port %d\n", listen_configs[i].address, listen_configs[i].port);
-                 close(server_fd);
-                 listen_sockets[i] = -1;
-                 continue;
-            }
-
-            if (strlen(listen_configs[i].site_ssl_cert_file) == 0 || SSL_CTX_use_certificate_file(listen_configs[i].ssl_ctx, listen_configs[i].site_ssl_cert_file, SSL_FILETYPE_PEM) <= 0) {
-                 ERR_print_errors_fp(stderr);
-                 fprintf(stderr, "Error loading SSL certificate file %s for %s port %d. Is it configured in the site file?\n", listen_configs[i].site_ssl_cert_file, listen_configs[i].address, listen_configs[i].port);
-                 SSL_CTX_free(listen_configs[i].ssl_ctx);
-                 close(server_fd);
-                 listen_sockets[i] = -1;
-                 continue;
-            }
-
-            if (strlen(listen_configs[i].site_ssl_key_file) == 0 || SSL_CTX_use_PrivateKey_file(listen_configs[i].ssl_ctx, listen_configs[i].site_ssl_key_file, SSL_FILETYPE_PEM) <= 0) {
-                 ERR_print_errors_fp(stderr);
-                 fprintf(stderr, "Error loading SSL private key file %s for %s port %d. Is it configured in the site file?\n", listen_configs[i].site_ssl_key_file, listen_configs[i].address, listen_configs[i].port);
-                 SSL_CTX_free(listen_configs[i].ssl_ctx);
-                 close(server_fd);
-                 listen_sockets[i] = -1;
-                 continue;
-            }
-
-            if (SSL_CTX_check_private_key(listen_configs[i].ssl_ctx) <= 0) {
-                 ERR_print_errors_fp(stderr);
-                 fprintf(stderr, "SSL private key does not match the certificate for %s port %d\n", listen_configs[i].address, listen_configs[i].port);
-                 SSL_CTX_free(listen_configs[i].ssl_ctx);
-                 close(server_fd);
-                 listen_sockets[i] = -1;
-                 continue;
-            }
-
-            if (strlen(listen_configs[i].site_ssl_chain_file) > 0) {
-                 if (SSL_CTX_use_certificate_chain_file(listen_configs[i].ssl_ctx, listen_configs[i].site_ssl_chain_file) <= 0) {
-                     ERR_print_errors_fp(stderr);
-                     fprintf(stderr, "Warning: Error loading SSL certificate chain file %s for %s port %d. Continuing without chain.\n", listen_configs[i].site_ssl_chain_file, listen_configs[i].address, listen_configs[i].port);
-                 }
-            }
-
-             SSL_CTX_set_options(listen_configs[i].ssl_ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1);
-             SSL_CTX_set_cipher_list(listen_configs[i].ssl_ctx, "HIGH:!aNULL:!MD5");
-
-        } else {
-            listen_configs[i].ssl_ctx = NULL;
-        }
-        // --- End SSL Context Setup ---
-
-
-        if (listen_configs[i].is_ipv6) {
-            struct sockaddr_in6 address;
-            memset(&address, 0, sizeof(address));
-            address.sin6_family = AF_INET6;
-            address.sin6_port = htons(listen_configs[i].port);
-
-            if (inet_pton(AF_INET6, listen_configs[i].address, &address.sin6_addr) <= 0) {
-                 perror("Invalid IPv6 address for listener");
-                 fprintf(stderr, "Invalid IPv6 address in config: %s\n", listen_configs[i].address);
-                 if (listen_configs[i].ssl_ctx) SSL_CTX_free(listen_configs[i].ssl_ctx);
-                 close(server_fd);
-                 listen_sockets[i] = -1;
-                 continue;
-            }
-
-            if (bind(server_fd, (struct sockaddr *)&address, addrlen) < 0) {
-                perror("IPv6 bind failed");
-                fprintf(stderr, "Could not bind IPv6 socket to %s port %d\n", listen_configs[i].address, listen_configs[i].port);
-                 if (listen_configs[i].ssl_ctx) SSL_CTX_free(listen_configs[i].ssl_ctx);
-                close(server_fd);
-                listen_sockets[i] = -1;
-                continue;
-            }
-        } else {
-            struct sockaddr_in address;
-            memset(&address, 0, sizeof(address));
-            address.sin_family = AF_INET;
-            address.sin_port = htons(listen_configs[i].port);
-
-            if (inet_pton(AF_INET, listen_configs[i].address, &address.sin_addr) <= 0) {
-                 perror("Invalid IPv4 address for listener");
-                 fprintf(stderr, "Invalid IPv4 address in config: %s\n", listen_configs[i].address);
-                 if (listen_configs[i].ssl_ctx) SSL_CTX_free(listen_configs[i].ssl_ctx);
-                 close(server_fd);
-                 listen_sockets[i] = -1;
-                 continue;
-            }
-
-            if (bind(server_fd, (struct sockaddr *)&address, addrlen) < 0) {
-                perror("IPv4 bind failed");
-                 fprintf(stderr, "Could not bind IPv4 socket to %s port %d\n", listen_configs[i].address, listen_configs[i].port);
-                 if (listen_configs[i].ssl_ctx) SSL_CTX_free(listen_configs[i].ssl_ctx);
-                close(server_fd);
-                listen_sockets[i] = -1;
-                continue;
+            // Free SSL_CTX if listener failed to bind
+            if (current_global_listeners.sockets[i].listener_ssl_ctx) {
+                SSL_CTX_free(current_global_listeners.sockets[i].listener_ssl_ctx);
+                current_global_listeners.sockets[i].listener_ssl_ctx = NULL;
             }
         }
-
-        if (listen(server_fd, 10) < 0) {
-            perror("listen failed for listener");
-            fprintf(stderr, "Could not listen on socket for %s port %d\n", listen_configs[i].address, listen_configs[i].port);
-            if (listen_configs[i].ssl_ctx) SSL_CTX_free(listen_configs[i].ssl_ctx);
-            close(server_fd);
-            listen_sockets[i] = -1;
-            continue;
-        }
-
-        listen_sockets[i] = server_fd;
-        poll_fds[actual_listeners_count].fd = server_fd;
-        poll_fds[actual_listeners_count].events = POLLIN;
-        poll_fds[actual_listeners_count].revents = 0;
-        listener_ssl_ctxs[actual_listeners_count] = listen_configs[i].ssl_ctx;
-
-        printf("Listening on %s port %d %s(Socket FD: %d)\n", listen_configs[i].address, listen_configs[i].port, listen_configs[i].ssl_enabled ? "SSL " : "", server_fd);
-        actual_listeners_count++;
     }
-
-    if (actual_listeners_count == 0) {
-        fprintf(stderr, "Failed to set up any listening sockets. Exiting.\n");
-        free(listen_configs);
-        free(listen_sockets);
+    if (active_listeners_count == 0) {
+        fprintf(stderr, "No active listener sockets after binding. Exiting.\n");
         free(poll_fds);
-        free(listener_ssl_ctxs);
-        EVP_cleanup();
-        ERR_free_strings();
-        exit(EXIT_FAILURE);
+        free_global_listeners(&current_global_listeners); // Free all allocated memory
+        return EXIT_FAILURE;
     }
 
-    struct passwd *pw = getpwnam(global_config.worker_user);
-    if (pw == NULL) {
-        perror("getpwnam failed");
-        fprintf(stderr, "Worker user '%s' not found. Cannot drop privileges. Exiting.\n", global_config.worker_user);
-        for (int i = 0; i < num_listeners; i++) {
-            if (listen_sockets[i] != -1) {
-                close(listen_sockets[i]);
-            }
-            if (listen_configs[i].ssl_ctx) SSL_CTX_free(listen_configs[i].ssl_ctx);
-        }
-        free(listen_configs);
-        free(listen_sockets);
-        free(poll_fds);
-        free(listener_ssl_ctxs);
-        EVP_cleanup();
-        ERR_free_strings();
-        exit(EXIT_FAILURE);
-    }
 
-    if (setgid(pw->pw_gid) != 0) {
-        perror("setgid failed");
-        fprintf(stderr, "Failed to set group ID to %d. Cannot drop privileges. Exiting.\n", pw->pw_gid);
-        for (int i = 0; i < num_listeners; i++) {
-            if (listen_sockets[i] != -1) {
-                close(listen_sockets[i]);
-            }
-            if (listen_configs[i].ssl_ctx) SSL_CTX_free(listen_configs[i].ssl_ctx);
-        }
-        free(listen_configs);
-        free(listen_sockets);
-        free(poll_fds);
-        free(listener_ssl_ctxs);
-        EVP_cleanup();
-        ERR_free_strings();
-        exit(EXIT_FAILURE);
-    }
-
-    if (setuid(pw->pw_uid) != 0) {
-        perror("setuid failed");
-        fprintf(stderr, "Failed to set user ID to %d. Cannot drop privileges. Exiting.\n", pw->pw_uid);
-        for (int i = 0; i < num_listeners; i++) {
-            if (listen_sockets[i] != -1) {
-                close(listen_sockets[i]);
-            }
-            if (listen_configs[i].ssl_ctx) SSL_CTX_free(listen_configs[i].ssl_ctx);
-        }
-        free(listen_configs);
-        free(listen_sockets);
-        free(poll_fds);
-        free(listener_ssl_ctxs);
-        EVP_cleanup();
-        ERR_free_strings();
-        exit(EXIT_FAILURE);
-    }
-
-    printf("Dropped privileges to user '%s' (UID: %d, GID: %d)\n", global_config.worker_user, pw->pw_uid, pw->pw_gid);
-
-    printf("CUI Threaded HTTP Listener running with %d listeners.\n", actual_listeners_count);
+    // --- Main Server Loop ---
+    printf("CUI Threaded HTTP/HTTPS Listener running with %d active listeners.\n", active_listeners_count);
     printf("Press Ctrl+C to stop the server\n");
 
-
     while (1) {
-        int poll_count = poll(poll_fds, actual_listeners_count, -1);
+        int poll_count = poll(poll_fds, active_listeners_count, -1); // Wait indefinitely
 
         if (poll_count < 0) {
-            if (errno == EINTR) {
-                continue;
-            } else {
-                perror("poll error");
-                break;
-            }
+            if (errno == EINTR) continue; // Interrupted by signal
+            perror("poll failed");
+            break;
         }
 
-        for (int i = 0; i < actual_listeners_count; i++) {
+        for (int i = 0; i < active_listeners_count; ++i) {
             if (poll_fds[i].revents & POLLIN) {
-                int new_socket;
-                 struct sockaddr_storage client_address;
-                 socklen_t client_addrlen = sizeof(client_address);
-
-                if ((new_socket = accept(poll_fds[i].fd, (struct sockaddr *)&client_address, &client_addrlen)) < 0) {
+                int new_socket = accept(poll_fds[i].fd, NULL, NULL);
+                if (new_socket < 0) {
                     if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                        continue;
-                    } else {
-                        perror("accept error");
-                        continue;
+                        continue; // No pending connections, non-blocking
                     }
+                    perror("accept failed");
+                    continue;
                 }
 
                 ClientThreadArgs *thread_args = malloc(sizeof(ClientThreadArgs));
@@ -878,9 +794,21 @@ int main() {
                     continue;
                 }
                 thread_args->sock = new_socket;
-                thread_args->ssl_ctx = listener_ssl_ctxs[i];
-				thread_args->root_dir = listen_configs[i].root_dir;
+                // Find the correct ListenSocket from global_listeners based on fd
+                thread_args->listener_socket = NULL;
+                for(int j = 0; j < current_global_listeners.count; ++j) {
+                    if (current_global_listeners.sockets[j].sock_fd == poll_fds[i].fd) {
+                        thread_args->listener_socket = &current_global_listeners.sockets[j];
+                        break;
+                    }
+                }
 
+                if (thread_args->listener_socket == NULL) {
+                    fprintf(stderr, "Error: Could not find ListenSocket for FD %d. Closing client connection.\n", poll_fds[i].fd);
+                    free(thread_args);
+                    close(new_socket);
+                    continue;
+                }
 
                 pthread_t client_thread;
                 if (pthread_create(&client_thread, NULL, handle_client, (void*) thread_args) < 0) {
@@ -889,31 +817,27 @@ int main() {
                     free(thread_args);
                     continue;
                 }
-                pthread_detach(client_thread);
+                pthread_detach(client_thread); // Detach thread to auto-clean resources
             }
             if (poll_fds[i].revents & (POLLERR | POLLHUP | POLLNVAL)) {
-                 fprintf(stderr, "Error or hangup on listener socket %d\n", poll_fds[i].fd);
+                 fprintf(stderr, "Error or hangup on listener socket %d (FD: %d)\n", i, poll_fds[i].fd);
             }
         }
     }
 
     printf("\nServer shutting down...\n");
 
-    for (int i = 0; i < num_listeners; i++) {
-        if (listen_sockets[i] != -1) {
-            close(listen_sockets[i]);
+    // --- Cleanup ---
+    for (int i = 0; i < current_global_listeners.count; i++) {
+        if (current_global_listeners.sockets[i].sock_fd != -1) {
+            close(current_global_listeners.sockets[i].sock_fd);
         }
-         if (listen_configs[i].ssl_ctx) SSL_CTX_free(listen_configs[i].ssl_ctx);
     }
 
-    free(listen_configs);
-    free(listen_sockets);
     free(poll_fds);
-    free(listener_ssl_ctxs);
-
-    EVP_cleanup();
+    free_global_listeners(&current_global_listeners); // Free all allocated memory (sites and listeners)
     ERR_free_strings();
-
-
-    return 0;
+    EVP_cleanup();
+    
+    return EXIT_SUCCESS;
 }

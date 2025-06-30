@@ -1,0 +1,8 @@
+listen 8080;
+listen 8443 ssl;
+
+ssl_certificate ./x.crt;
+ssl_key ./x.pem;
+ssl_chain ./x_chain.crt;
+
+root /var/www/anybind/html;

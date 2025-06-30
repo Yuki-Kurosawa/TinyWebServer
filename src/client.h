@@ -6,17 +6,16 @@
 #include <stdbool.h>     // Required for bool type
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include "parser.h" // Include the parser header for request handling
+#include <sys/socket.h> // Required for sa_family_t
+#include "parser.h" // Include parser.h for request handling
 
-// Define common constants that handle_client might need
+// Common constants
 #define MAX_REQUEST_SIZE 8192 // Maximum size of the incoming request to read
 #define BUFFER_SIZE 1024      // General buffer size
+#define MAX_LINE_SIZE 256     // Max line for config parsing
+#define PATH_MAX_LEN 4096     // Max file path length
 
-// Assume these are defined by the build system (e.g., via configure and config.h)
-// #define GLOBAL_CONFIG_PATH "/etc/webserver/webserver.conf"
-// #define SITES_DIR_PATH "/etc/webserver/sites-enabled"
-
-// Provide default values for standalone compilation/testing
+// Configuration paths (can be overridden by build system)
 #ifndef GLOBAL_CONFIG_PATH
 #define GLOBAL_CONFIG_PATH "webserver.conf"
 #endif
@@ -25,13 +24,9 @@
 #define SITES_DIR_PATH "sites-enabled"
 #endif
 
-// Removed BUFFER_SIZE, MAX_REQUEST_SIZE if they are now in client.h
-// If you want them global, consider putting them in a separate common_defs.h
-// For now, they are in client.h and implicitly used by www.c for ListenConfig's PATH_MAX_LEN, etc.
-
-#define MAX_LINE_SIZE 256 // Max line for config parsing
-#define MAX_LISTEN_SOCKETS 50 // Max number of listen sockets
-#define PATH_MAX_LEN 4096 // Max file path length
+#define MAX_LISTEN_SOCKETS 50 // Max number of unique listen sockets (IP:Port:SSL)
+#define MAX_SITES_PER_LISTENER 10 // Max number of sites a single ListenSocket can serve
+#define MAX_SITE_LISTENERS 4  // Max number of listen directives per site config file (IPv4/6, HTTP/S)
 
 
 // Structure to hold global configuration settings
@@ -42,35 +37,71 @@ typedef struct {
     bool specified; // True if global config file was processed
 } GlobalConfig;
 
-// Structure to hold parsed listening configuration
+// Structure to hold configuration for a single network listener (IP:Port combo)
 typedef struct {
-    bool is_ipv6;
-    char address[INET6_ADDRSTRLEN];
-    int port;
-    bool ssl_enabled; // Flag to indicate if SSL is enabled for this listener
-	char* *server_name; // server name settings, _ for any FQDN
-    SSL_CTX *ssl_ctx; // SSL context for this listener (created later)
-    char site_ssl_cert_file[PATH_MAX_LEN];
-    char site_ssl_key_file[PATH_MAX_LEN];
-    char site_ssl_chain_file[PATH_MAX_LEN];
-	char root_dir[PATH_MAX_LEN]; // Root directory for this listener, if applicable
-} ListenConfig;
+    char address[INET6_ADDRSTRLEN]; // Address for the listener (IPv4 or IPv6)
+    int port;                       // Port number for the listener
+    sa_family_t family;             // Address family (AF_INET for IPv4, AF_INET6 for IPv6)
+    bool ssl_enabled;               // Flag to indicate if SSL is enabled for this listener
+} ListenSocketConfig;
 
-// Structure to hold the result of parsing a single line
+// Structure to hold parsed site configuration
 typedef struct {
-    ListenConfig configs[2]; // Max 2 for port-only (IPv4 & IPv6)
-    int count;
-} ParsedListenDirectives;
+    // Basic site details
+    char** server_name;         // Array of server names (FQDNs), _ for any FQDN
+    int num_server_names;       // Number of server names in the array
+    char root_dir[PATH_MAX_LEN]; // Root directory for this site
+
+    // Site-specific SSL configuration (for SNI)
+    SSL_CTX *ssl_ctx;                   // SSL context for this site (created from its certs)
+    char site_ssl_cert_file[PATH_MAX_LEN]; // Path to site's SSL certificate file
+    char site_ssl_key_file[PATH_MAX_LEN];  // Path to site's SSL private key file
+    char site_ssl_chain_file[PATH_MAX_LEN]; // Path to site's SSL chain file
+
+    // Listeners this site wants to bind to (not actual sockets, just configurations)
+    ListenSocketConfig listen_sockets[MAX_SITE_LISTENERS];
+    int listen_socket_count;
+} SiteConfig;
+
+// Structure to represent an actual active listening socket
+// This links a network listener to the multiple sites it might serve
+typedef struct {
+    ListenSocketConfig config;          // Configuration for this specific listen socket
+    int sock_fd;                        // Actual file descriptor for the bound socket
+    SSL_CTX *listener_ssl_ctx;          // Listener-level SSL context (for SNI callback)
+    SiteConfig **sites;                 // Pointer to an array of SiteConfig pointers served by this listener
+    int site_count;                     // Number of sites served by this listener
+} ListenSocket;
+
+// Structure to hold all active listening sockets
+typedef struct {
+    ListenSocket sockets[MAX_LISTEN_SOCKETS]; // Array of active listen sockets
+    int count;                               // Number of active listen sockets
+} GlobalListenConfig;
 
 // Structure to pass arguments to the client handling thread
 typedef struct {
-    int sock;
-    SSL_CTX *ssl_ctx; // Pass the SSL_CTX for this connection (NULL if non-SSL)
-	char* root_dir; // Root directory for this listener, if applicable
+    int sock;                       // Client socket file descriptor
+    ListenSocket *listener_socket;  // Pointer to the ListenSocket this client connected through
 } ClientThreadArgs;
 
-// Function to handle a single client connection
-// This function will be executed in a separate thread.
+// --- Function Prototypes ---
+
+// From www.c
+bool parse_listen_directive_into_config(char *line, ListenSocketConfig *config);
+SiteConfig *parse_site_file(const char *filepath, GlobalConfig *global_config);
+void read_all_site_configs(const char *sites_dir_path, GlobalConfig *global_config, GlobalListenConfig *global_listeners_ptr);
+SSL_CTX *create_ssl_context(const char *cert_file, const char *key_file, const char *chain_file);
+void free_site_config(SiteConfig *site);
+void free_listen_socket(ListenSocket *ls);
+void free_global_listeners(GlobalListenConfig *listeners);
+
+
+// From client.c
 void *handle_client(void *thread_args_ptr);
+// SNI callback for OpenSSL
+int sni_callback(SSL *ssl, int *ad, void *arg);
+// Function to find a site based on hostname
+SiteConfig* find_site_for_hostname(ListenSocket *listener, const char *hostname);
 
 #endif // CLIENT_H
