@@ -1,7 +1,9 @@
 listen 8443 ssl;
 
+server_name localhost test.com;
+
 ssl_certificate ./x.crt;
 ssl_key ./x.pem;
 ssl_chain ./x_chain.crt;
 
-root /var/www/html;
+root /var/www/default_ssl/html;

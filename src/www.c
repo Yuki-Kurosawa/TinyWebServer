@@ -3,8 +3,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <poll.h>
@@ -19,58 +17,9 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
-// --- Corrected Include: client.h ---
 #include "client.h"
-// --- END Corrected Include ---
-
-// Assume these are defined by the build system (e.g., via configure and config.h)
-// #define GLOBAL_CONFIG_PATH "/etc/webserver/webserver.conf"
-// #define SITES_DIR_PATH "/etc/webserver/sites-enabled"
-
-// Provide default values for standalone compilation/testing
-#ifndef GLOBAL_CONFIG_PATH
-#define GLOBAL_CONFIG_PATH "webserver.conf"
-#endif
-
-#ifndef SITES_DIR_PATH
-#define SITES_DIR_PATH "sites-enabled"
-#endif
-
-// Removed BUFFER_SIZE, MAX_REQUEST_SIZE if they are now in client.h
-// If you want them global, consider putting them in a separate common_defs.h
-// For now, they are in client.h and implicitly used by www.c for ListenConfig's PATH_MAX_LEN, etc.
-
-#define MAX_LINE_SIZE 256 // Max line for config parsing
-#define MAX_LISTEN_SOCKETS 50 // Max number of listen sockets
-#define PATH_MAX_LEN 4096 // Max file path length
 
 
-// Structure to hold global configuration settings
-typedef struct {
-    bool ipv4_enabled;
-    bool ipv6_enabled;
-    char worker_user[MAX_LINE_SIZE];
-    bool specified; // True if global config file was processed
-} GlobalConfig;
-
-// Structure to hold parsed listening configuration
-typedef struct {
-    bool is_ipv6;
-    char address[INET6_ADDRSTRLEN];
-    int port;
-    bool ssl_enabled; // Flag to indicate if SSL is enabled for this listener
-    SSL_CTX *ssl_ctx; // SSL context for this listener (created later)
-    char site_ssl_cert_file[PATH_MAX_LEN];
-    char site_ssl_key_file[PATH_MAX_LEN];
-    char site_ssl_chain_file[PATH_MAX_LEN];
-	char root_dir[PATH_MAX_LEN]; // Root directory for this listener, if applicable
-} ListenConfig;
-
-// Structure to hold the result of parsing a single line
-typedef struct {
-    ListenConfig configs[2]; // Max 2 for port-only (IPv4 & IPv6)
-    int count;
-} ParsedListenDirectives;
 
 // parse_single_listen_directive, read_global_config, parse_site_file, read_all_site_configs
 // (These functions remain in www.c as they are part of the main server configuration logic)
@@ -164,6 +113,7 @@ ParsedListenDirectives parse_single_listen_directive(char *line) {
         result.configs[0].site_ssl_key_file[0] = '\0';
         result.configs[0].site_ssl_chain_file[0] = '\0';
 		result.configs[0].root_dir[0] = '\0'; 
+		result.configs[0].server_name = NULL; 
 
         result.configs[1].is_ipv6 = true;
         strcpy(result.configs[1].address, "::");
@@ -173,7 +123,8 @@ ParsedListenDirectives parse_single_listen_directive(char *line) {
         result.configs[1].site_ssl_cert_file[0] = '\0';
         result.configs[1].site_ssl_key_file[0] = '\0';
         result.configs[1].site_ssl_chain_file[0] = '\0';
-		result.configs[0].root_dir[0] = '\0'; 
+		result.configs[1].root_dir[0] = '\0'; 
+		result.configs[1].server_name = NULL; 
 
     } else {
         result.count = 1;
@@ -185,6 +136,7 @@ ParsedListenDirectives parse_single_listen_directive(char *line) {
         result.configs[0].site_ssl_key_file[0] = '\0';
         result.configs[0].site_ssl_chain_file[0] = '\0';
 		result.configs[0].root_dir[0] = '\0'; 
+		result.configs[0].server_name = NULL; 
 
         if (address_str != NULL && strlen(address_str) > 0) {
              strncpy(result.configs[0].address, address_str, INET6_ADDRSTRLEN - 1);
@@ -350,12 +302,124 @@ ListenConfig* parse_site_file(const char *filepath, const GlobalConfig *global_c
 		} else if (strcmp(key, "root") == 0) {
                 strncpy(last_parsed_listener->root_dir, value, PATH_MAX_LEN - 1);
                 last_parsed_listener->root_dir[PATH_MAX_LEN - 1] = '\0';
-		} else {
+		} else if (strcmp(key,"server_name")==0)
+		{
+			if (last_parsed_listener != NULL) {
+                // Free any previously allocated server names for this listener
+                if (last_parsed_listener->server_name != NULL) {
+                    for (int j = 0; last_parsed_listener->server_name[j] != NULL; j++) {
+                        free(last_parsed_listener->server_name[j]);
+                    }
+                    free(last_parsed_listener->server_name);
+                    last_parsed_listener->server_name = NULL;
+                }
+
+                // Skip the "server_name" keyword itself from the original line
+                char *server_names_str = strstr(line, key);
+
+                if (server_names_str != NULL) {
+                    server_names_str += strlen(key); // Move past "server_name"
+                    server_names_str += strspn(server_names_str, " \t"); // Move past whitespace
+
+                    // Count the number of server names
+                    int name_count = 0;
+                    char *temp_str = strdup(server_names_str); // Duplicate to tokenize
+                    if (temp_str == NULL) {
+                        perror("strdup failed");
+                        fclose(file);
+                        return current_listeners;
+                    }
+                    char *token = strtok(temp_str, " \t;");
+                    while (token != NULL) {
+                        name_count++;
+                        token = strtok(NULL, " \t;");
+                    }
+                    free(temp_str); // Free the duplicated string
+
+                    // Allocate memory for the array of server name pointers
+                    last_parsed_listener->server_name = malloc((name_count + 1) * sizeof(char*));
+                    if (last_parsed_listener->server_name == NULL) {
+                        perror("malloc failed for server_name pointers");
+                        fclose(file);
+                        return current_listeners;
+                    }
+
+                    // Populate the array with server names
+                    int current_name_idx = 0;
+                    temp_str = strdup(server_names_str); // Duplicate again for actual parsing
+                    if (temp_str == NULL) {
+                        perror("strdup failed");
+                        // Clean up partially allocated server_name array
+                        for(int j=0; j < current_name_idx; j++) {
+                            free(last_parsed_listener->server_name[j]);
+                        }
+                        free(last_parsed_listener->server_name);
+                        last_parsed_listener->server_name = NULL;
+                        fclose(file);
+                        return current_listeners;
+                    }
+                    token = strtok(temp_str, " \t;");
+                    while (token != NULL && current_name_idx < name_count) {
+                        last_parsed_listener->server_name[current_name_idx] = strdup(token);
+                        if (last_parsed_listener->server_name[current_name_idx] == NULL) {
+                            perror("strdup failed for individual server_name");
+                            // Clean up
+                            for(int j=0; j <= current_name_idx; j++) { // <= to free current token if it was allocated
+                                free(last_parsed_listener->server_name[j]);
+                            }
+                            free(last_parsed_listener->server_name);
+                            last_parsed_listener->server_name = NULL;
+                            free(temp_str);
+                            fclose(file);
+                            return current_listeners;
+                        }
+                        current_name_idx++;
+                        token = strtok(NULL, " \t;");
+                    }
+                    last_parsed_listener->server_name[name_count] = NULL; // Null-terminate the array
+
+                    free(temp_str); // Free the duplicated string
+                }
+				
+            } else {
+                fprintf(stderr, "Warning: 'server_name' directive found before any 'listen' directive in %s. Ignoring.\n", filepath);
+            }
+		}
+		
+		else {
             fprintf(stderr, "Warning: Unhandled directive outside of 'listen' block or without a preceding listen directive: %s in %s\n", line, filepath);
         }
     }
 
     fclose(file);
+	//printf("Parsed %d listeners from %s\n", *current_num_listeners, filepath);
+	printf("Current listeners:\n");
+	for (int i = 0; i < *current_num_listeners; i++) {
+
+		// set default server_name if not set
+		if (current_listeners[i].server_name == NULL) {
+					current_listeners[i].server_name = malloc(1 * sizeof(char*));
+					current_listeners[i].server_name[0] = "_"; // No server names specified
+		}
+
+		printf("Listener %d: %s:%d, SSL: %s, Root: %s\n", i + 1,
+			   current_listeners[i].address,
+			   current_listeners[i].port,
+			   current_listeners[i].ssl_enabled ? "Enabled" : "Disabled",
+			   current_listeners[i].root_dir);
+		if (current_listeners[i].server_name != NULL) {
+			printf("Listener %d Server Names: ",i+1);
+			for (int j = 0; current_listeners[i].server_name[j] != NULL; j++) {
+				printf("%s,", current_listeners[i].server_name[j]);
+			}
+			printf("\n");
+		}
+		else{
+			printf("Listener %d Server Names: <None>\n", i + 1);
+		}
+	}
+	printf("-----------------------\n");
+
     return current_listeners;
 }
 
