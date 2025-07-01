@@ -187,7 +187,7 @@ void DemoProcessRequest(Request *req, Response *res)
 
 
 	//--- NEW: Display Server Context Data from ServerInfo ---
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<div class=\"section\">\n<h2>Server Context (from ServerInfo)</h2>\n");
+	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<div class=\"section\">\n<h2>Server Info</h2>\n");
 	if (req->server_info != NULL) {
 		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<p><strong>Server IP:</strong> %s</p>\n",
 			req->server_info->server_ip ? req->server_info->server_ip : "N/A");
