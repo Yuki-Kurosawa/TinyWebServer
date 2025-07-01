@@ -778,7 +778,10 @@ int main(int argc, char *argv[]) {
 
         for (int i = 0; i < active_listeners_count; ++i) {
             if (poll_fds[i].revents & POLLIN) {
-                int new_socket = accept(poll_fds[i].fd, NULL, NULL);
+                struct sockaddr_storage client_addr; // Declare client_addr here
+                socklen_t client_addr_len = sizeof(client_addr); // Initialize length
+
+                int new_socket = accept(poll_fds[i].fd, (struct sockaddr *)&client_addr, &client_addr_len);
                 if (new_socket < 0) {
                     if (errno == EAGAIN || errno == EWOULDBLOCK) {
                         continue; // No pending connections, non-blocking
@@ -794,6 +797,10 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
                 thread_args->sock = new_socket;
+                // Copy the client address information
+                thread_args->remote_addr = client_addr;
+                thread_args->remote_addr_len = client_addr_len;
+
                 // Find the correct ListenSocket from global_listeners based on fd
                 thread_args->listener_socket = NULL;
                 for(int j = 0; j < current_global_listeners.count; ++j) {

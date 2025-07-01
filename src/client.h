@@ -7,7 +7,10 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h> // Required for sa_family_t
-#include "parser.h" // Include parser.h for request handling
+
+// --- NEW: Include parser.h for HandleRequest() ---
+#include "parser.h" // Assumed to provide HandleRequest() and other parsing related definitions
+// --- END NEW ---
 
 // Common constants
 #define MAX_REQUEST_SIZE 8192 // Maximum size of the incoming request to read
@@ -83,18 +86,21 @@ typedef struct {
 typedef struct {
     int sock;                       // Client socket file descriptor
     ListenSocket *listener_socket;  // Pointer to the ListenSocket this client connected through
+    struct sockaddr_storage remote_addr; // Store remote address for client.c to pass to parser.c
+    socklen_t remote_addr_len;
 } ClientThreadArgs;
 
 // --- Function Prototypes ---
 
 // From www.c
-bool parse_listen_directive_into_config(char *line, ListenSocketConfig *config);
+bool parse_listen_value_into_config(char *value_part, ListenSocketConfig *config); // Updated name
 SiteConfig *parse_site_file(const char *filepath, GlobalConfig *global_config);
 void read_all_site_configs(const char *sites_dir_path, GlobalConfig *global_config, GlobalListenConfig *global_listeners_ptr);
 SSL_CTX *create_ssl_context(const char *cert_file, const char *key_file, const char *chain_file);
 void free_site_config(SiteConfig *site);
 void free_listen_socket(ListenSocket *ls);
 void free_global_listeners(GlobalListenConfig *listeners);
+void parse_global_config(const char *filepath, GlobalConfig *config);
 
 
 // From client.c
@@ -103,5 +109,7 @@ void *handle_client(void *thread_args_ptr);
 int sni_callback(SSL *ssl, int *ad, void *arg);
 // Function to find a site based on hostname
 SiteConfig* find_site_for_hostname(ListenSocket *listener, const char *hostname);
+
+// --- REMOVED: HandleRequest() declaration here as it's from parser.h ---
 
 #endif // CLIENT_H

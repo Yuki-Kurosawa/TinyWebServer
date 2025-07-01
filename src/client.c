@@ -1,12 +1,17 @@
 // client.c
-#include "client.h" // Include our own header
+#include "client.h" // Include our own header (which now includes parser.h)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <errno.h>        // For errno
+#include <fcntl.h>        // For fcntl (setting non-blocking)
+#include <sys/time.h>     // For struct timeval
 #include <openssl/err.h>  // For SSL_get_error and ERR_print_errors_fp
+#include <arpa/inet.h>    // For inet_ntop
+#include <netinet/in.h>   // For sockaddr_in, sockaddr_in6
+
 
 // Function to find a site based on hostname
 // This will be used by both SNI callback and HTTP Host header parsing
@@ -20,7 +25,7 @@ SiteConfig* find_site_for_hostname(ListenSocket *listener, const char *hostname)
             if (strcmp(current_site->server_name[j], hostname) == 0) {
                 return current_site;
             }
-            // Default site fallback
+            // Default site fallback (the "_" server_name)
             if (strcmp(current_site->server_name[j], "_") == 0) {
                 default_site = current_site;
             }
@@ -47,12 +52,11 @@ int sni_callback(SSL *ssl, int *ad, void *arg) {
             fprintf(stderr, "SNI callback: Switched SSL_CTX for hostname %s.\n", servername);
             return SSL_TLSEXT_ERR_OK; // Indicate success
         } else {
-            fprintf(stderr, "SNI callback: No matching site or SSL_CTX found for hostname %s. Using default.\n", servername);
-            // Optionally, return SSL_TLSEXT_ERR_NOACK or SSL_TLSEXT_ERR_ALERT_FATAL if strict
-            return SSL_TLSEXT_ERR_NOACK; // Let OpenSSL use the default context if set, or proceed
+            fprintf(stderr, "SNI callback: No matching site or SSL_CTX found for hostname %s. Using default or failing.\n", servername);
+            return SSL_TLSEXT_ERR_NOACK; // Let OpenSSL use the default context
         }
     }
-    // No server name provided by client, or an error
+    // No server name provided by client, or an error from SSL_get_servername
     return SSL_TLSEXT_ERR_NOACK; // Let OpenSSL use the default context
 }
 
@@ -62,6 +66,8 @@ void *handle_client(void *thread_args_ptr) {
     ClientThreadArgs *args = (ClientThreadArgs*) thread_args_ptr;
     int sock = args->sock;
     ListenSocket *listener = args->listener_socket; // Pointer to the ListenSocket this connection came from
+    struct sockaddr_storage remote_addr = args->remote_addr; // Copy remote address
+    socklen_t remote_addr_len = args->remote_addr_len; // Copy remote address length
     free(thread_args_ptr); // Free the dynamically allocated thread arguments
 
     SSL *ssl = NULL;
@@ -94,11 +100,6 @@ void *handle_client(void *thread_args_ptr) {
             pthread_exit(NULL);
         }
         fprintf(stderr, "SSL handshake successful for socket %d.\n", sock);
-        // After handshake, the SSL object *might* have been switched to a site-specific SSL_CTX
-        // We can get the active SSL_CTX from the SSL object itself.
-        // For simplicity, we'll rely on find_site_for_hostname based on Host header for now,
-        // but a more robust SNI implementation might pass a reference to the selected SiteConfig
-        // directly from the SNI callback to handle_client.
     }
     // --- END SSL HANDSHAKE ---
 
@@ -108,8 +109,7 @@ void *handle_client(void *thread_args_ptr) {
     ssize_t bytes_received = 0;
     ssize_t total_bytes_received = 0;
 
-    // Set socket to non-blocking for a short period to avoid blocking indefinitely
-    // fcntl(sock, F_SETFL, O_NONBLOCK); // This is usually done for poll/epoll, direct read should block or timeout
+    // Set a receive timeout to prevent blocking indefinitely
     struct timeval timeout;
     timeout.tv_sec = 5;  // 5 second timeout
     timeout.tv_usec = 0;
@@ -126,13 +126,13 @@ void *handle_client(void *thread_args_ptr) {
             if (use_ssl) {
                 int ssl_err = SSL_get_error(ssl, bytes_received);
                 if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
-                    continue; // SSL handshake might still be in progress (shouldn't happen after SSL_accept)
+                    continue; // Non-blocking SSL_read, data not ready yet
                 }
                 fprintf(stderr, "SSL_read error for socket %d, error: %d\n", sock, ssl_err);
                 ERR_print_errors_fp(stderr);
             } else {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    continue; // No data available right now, try again
+                    continue; // Non-blocking read, data not ready yet
                 }
                 if (errno == ETIMEDOUT) { // Handle read timeout
                     fprintf(stderr, "Read timeout for socket %d.\n", sock);
@@ -181,17 +181,16 @@ void *handle_client(void *thread_args_ptr) {
     if (strlen(hostname) > 0) {
         active_site = find_site_for_hostname(listener, hostname);
         if (active_site) {
-            fprintf(stderr, "Selected site for Host '%s': %s\n", hostname, active_site->root_dir);
+            fprintf(stderr, "Selected site for Host '%s': %s (root: %s)\n", hostname, active_site->server_name[0], active_site->root_dir);
         } else {
             fprintf(stderr, "No specific site found for Host '%s'. Attempting to use default site if any.\n", hostname);
-            // find_site_for_hostname already handles fallback to '_' site
         }
     }
 
     // Fallback to the first site associated with this listener if no Host header or no match
     if (active_site == NULL && listener->site_count > 0) {
-        active_site = listener->sites[0];
-        fprintf(stderr, "Using default/first associated site: %s\n", active_site->root_dir);
+        active_site = listener->sites[0]; // Use the first site as a default if no Host header or no match
+        fprintf(stderr, "Using default/first associated site: %s (root: %s)\n", active_site->server_name[0], active_site->root_dir);
     } else if (active_site == NULL) {
         fprintf(stderr, "Error: No site configured for this listener! Cannot serve request on socket %d.\n", sock);
         const char* error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nNo site configured for this port.";
@@ -202,10 +201,76 @@ void *handle_client(void *thread_args_ptr) {
         pthread_exit(NULL);
     }
 
+    // --- NEW: Prepare ServerInfo for HandleRequest ---
+    ServerInfo *server_info = (ServerInfo*)malloc(sizeof(ServerInfo));
+    if (server_info == NULL) {
+        perror("malloc failed for ServerInfo in client.c");
+        // Handle error, send 500 or exit thread
+        const char* error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nServer out of memory.";
+        if (use_ssl) SSL_write(ssl, error_response, strlen(error_response));
+        else write(sock, error_response, strlen(error_response));
+        if (use_ssl) SSL_free(ssl);
+        close(sock);
+        pthread_exit(NULL);
+    }
+    memset(server_info, 0, sizeof(ServerInfo));
+
+    // Get server IP and port (local address of the listener socket)
+    char server_ip_str[INET6_ADDRSTRLEN];
+    struct sockaddr_storage local_addr;
+    socklen_t local_addr_len = sizeof(local_addr);
+
+    if (getsockname(listener->sock_fd, (struct sockaddr *)&local_addr, &local_addr_len) == 0) {
+        if (local_addr.ss_family == AF_INET) {
+            inet_ntop(AF_INET, &((struct sockaddr_in*)&local_addr)->sin_addr, server_ip_str, sizeof(server_ip_str));
+            server_info->server_port = ntohs(((struct sockaddr_in*)&local_addr)->sin_port);
+        } else if (local_addr.ss_family == AF_INET6) {
+            inet_ntop(AF_INET6, &((struct sockaddr_in6*)&local_addr)->sin6_addr, server_ip_str, sizeof(server_ip_str));
+            server_info->server_port = ntohs(((struct sockaddr_in6*)&local_addr)->sin6_port);
+        } else {
+            strcpy(server_ip_str, "N/A");
+            server_info->server_port = 0;
+        }
+        server_info->server_ip = strdup(server_ip_str);
+    } else {
+        perror("getsockname failed for server IP in client.c");
+        server_info->server_ip = strdup("N/A");
+        server_info->server_port = 0;
+    }
+
+    // Get remote IP and port (client's address)
+    char remote_ip_str[INET6_ADDRSTRLEN];
+    if (remote_addr_len > 0) { // Check if remote_addr was successfully populated
+        if (remote_addr.ss_family == AF_INET) {
+            inet_ntop(AF_INET, &((struct sockaddr_in*)&remote_addr)->sin_addr, remote_ip_str, sizeof(remote_ip_str));
+            server_info->remote_port = ntohs(((struct sockaddr_in*)&remote_addr)->sin_port);
+            //fprintf(stderr, "Debug: Remote IPv4: %s:%d\n", remote_ip_str, server_info->remote_port);
+        } else if (remote_addr.ss_family == AF_INET6) {
+            inet_ntop(AF_INET6, &((struct sockaddr_in6*)&remote_addr)->sin6_addr, remote_ip_str, sizeof(remote_ip_str));
+            server_info->remote_port = ntohs(((struct sockaddr_in6*)&remote_addr)->sin6_port);
+            //fprintf(stderr, "Debug: Remote IPv6: %s:%d\n", remote_ip_str, server_info->remote_port);
+        } else {
+            strcpy(remote_ip_str, "N/A");
+            server_info->remote_port = 0;
+            //fprintf(stderr, "Debug: Remote IP: N/A (Unknown family %d)\n", remote_addr.ss_family);
+        }
+        server_info->remote_ip = strdup(remote_ip_str);
+    } else {
+        server_info->remote_ip = strdup("N/A");
+        server_info->remote_port = 0;
+        //fprintf(stderr, "Debug: Remote IP: N/A (remote_addr_len is 0)\n");
+    }
+    
+    server_info->root_dir = active_site->root_dir; // This is a pointer, not a copy. Ownership remains with SiteConfig.
+    // --- END NEW ---
+
 
     // --- Prepare and Send the HTTP Response (using SSL_write or write) ---
-    HandleRequest(active_site->root_dir, total_bytes_received, request_buffer,
+    // HandleRequest now receives ServerInfo* directly
+    HandleRequest(server_info, total_bytes_received, request_buffer,
                 &actual_response_len, response_buffer);
+
+    // server_info and its strdup'd members are freed by free_request_members in parser.c
 
     if (use_ssl) {
         if (SSL_write(ssl, response_buffer, actual_response_len) <= 0) {

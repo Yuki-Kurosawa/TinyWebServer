@@ -48,6 +48,14 @@ typedef struct {
     char *value;
 } KeyValuePair;
 
+typedef struct {
+	char* server_ip;
+	int server_port; 
+	char *remote_ip;
+	int remote_port;
+	char *root_dir; 
+} ServerInfo;
+
 // Structure to represent a parsed HTTP request
 typedef struct {
     HttpMethod method;  // HttpMethod GET POST PUT DELETE INFO 
@@ -60,12 +68,13 @@ typedef struct {
 						// it can be NULL if not set, but it is recommended to set it
 						// so that we can check the handler for this request
 
+	ServerInfo *server_info; // ServerInfo for this request, used to find the server info
+						// it is used to find the server info for this request
+						// it can be NULL if not set, but it is recommended to set it
+						// so that we can check the server info for this request
+
     char *path_and_query; // Path and query string of the request, /index.html?q=1&b=2
 	char *path; // Path of the request, e.g., /index.html
-	char *root_dir; // Root directory for this request, e.g., /var/www/html
-						// this is used to serve static files from the root directory
-						// it can be NULL if not set, but it is recommended to set it
-						// so that we can serve static files from the root directory
 
 	int query_count; // Number of query parameters in the request, default 0
 	char *query_string; // Query string of the request, e.g., "q=1&b=2"
