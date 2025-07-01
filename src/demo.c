@@ -197,7 +197,7 @@ void DemoProcessRequest(Request *req, Response *res)
 			req->server_info->remote_ip ? req->server_info->remote_ip : "N/A");
 		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<p><strong>Remote Port:</strong> %d</p>\n",
 			req->server_info->remote_port);
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<p><strong>Site Root (from ServerInfo):</strong> %s</p>\n",
+		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<p><strong>Site Root:</strong> %s</p>\n",
 			req->server_info->root_dir ? req->server_info->root_dir : "N/A");
 		// If you need more details from ListenSocket (like site_count, individual site details),
 		// you would need to pass a pointer to ListenSocket directly or through a more complex ServerInfo.
