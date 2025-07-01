@@ -1,10 +1,10 @@
-#include "demo.h" // This will include handler.h, which now has ServerInfo
+#include "info.h" // This will include handler.h, which now has ServerInfo
 
 #include <string.h> // For memcpy and strlen
 #include <stdio.h>  // For printf (if needed for debugging)
 #include <stdlib.h> // For malloc and free
 
-#include "common.h" 
+#include "../common.h" 
 
 #define CACHE_SIZE 131772 // Define a cache size for the HTML body
 

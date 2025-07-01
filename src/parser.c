@@ -6,7 +6,7 @@
 #include <arpa/inet.h> // For inet_ntop
 #include <netinet/in.h> // For sockaddr_in, sockaddr_in6
 
-#include "demo.h" // a demo handler for the HTTP request
+#include "handlers/info.h" // a demo handler for the HTTP request
 
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h> // For PCRE2 regex matching
@@ -15,10 +15,10 @@
 /* begin handler registrations */
 
 Handler handlers[] = {
-	{ {"Static Handler","/", HANDLER_STATIC}, DemoProcessRequest }, 
-	{ {"Prefix Handler","/test", HANDLER_PREFIX}, DemoProcessRequest }, 
-    { {"Suffix Handler","suffix.do", HANDLER_SUFFIX}, DemoProcessRequest },
-    { {"Regex Handler", "regex(.*).do", HANDLER_REGEX}, DemoProcessRequest },
+	{ {"Static Handler","/", HANDLER_STATIC}, InfoProcessRequest }, 
+	{ {"Prefix Handler","/test", HANDLER_PREFIX}, InfoProcessRequest }, 
+    { {"Suffix Handler","suffix.do", HANDLER_SUFFIX}, InfoProcessRequest },
+    { {"Regex Handler", "regex(.*).do", HANDLER_REGEX}, InfoProcessRequest },
 	{ NULL, NULL } // End marker for the handlers array
 };
 
