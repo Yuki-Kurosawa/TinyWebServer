@@ -1,5 +1,5 @@
-#ifndef DEMO_H
-#define DEMO_H
+#ifndef INFO_H
+#define INFO_H
 
 #include "../../include/handler.h"
 

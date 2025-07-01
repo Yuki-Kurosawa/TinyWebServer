@@ -8,7 +8,7 @@
 
 #define CACHE_SIZE 131772 // Define a cache size for the HTML body
 
-void DemoProcessRequest(Request *req, Response *res)
+void InfoProcessRequest(Request *req, Response *res)
 {	
 	if (req == NULL || res == NULL) {
 		printf("Invalid request or response object.\n");
