@@ -6,7 +6,8 @@
 #include <arpa/inet.h> // For inet_ntop
 #include <netinet/in.h> // For sockaddr_in, sockaddr_in6
 
-#include "handlers/info.h" // a demo handler for the HTTP request
+#include "handlers/info.h" // ServerInfoHandler 的头文件
+#include "handlers/static_file.h" // 新增: StaticFileHandler 的头文件
 
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h> // For PCRE2 regex matching
@@ -15,10 +16,9 @@
 /* begin handler registrations */
 
 Handler handlers[] = {
-	{ {"Static Handler","/", HANDLER_STATIC}, InfoProcessRequest }, 
-	{ {"Prefix Handler","/test", HANDLER_PREFIX}, InfoProcessRequest }, 
-    { {"Suffix Handler","suffix.do", HANDLER_SUFFIX}, InfoProcessRequest },
-    { {"Regex Handler", "regex(.*).do", HANDLER_REGEX}, InfoProcessRequest },
+	{ {"ServerInfoHandler",".info", HANDLER_SUFFIX}, InfoProcessRequest }, 
+	{ {"StaticFileHandler","/", HANDLER_PREFIX}, StaticFileProcessRequest }, 
+	// StaticFileHandler is always the last handler
 	{ NULL, NULL } // End marker for the handlers array
 };
 
@@ -491,14 +491,17 @@ void ResponseObjectToPacket(Response *resp, char *response, size_t *resp_len)
 	body_len += snprintf(response_body + body_len, sizeof(response_body) - body_len, "\r\n");
 
 	if (resp->body != NULL && resp->body_len > 0) {
-		body_len += snprintf(response_body + body_len, sizeof(response_body) - body_len,
-			"%s", resp->body);
+		// For binary data, direct memcpy is safer than snprintf which expects C strings.
+		// However, for simplicity and assuming mostly text/HTML, snprintf is used here.
+		// If actual binary files are served, this part needs careful handling to avoid issues with null bytes.
+		memcpy(response_body + body_len, resp->body, resp->body_len);
+		body_len += resp->body_len;
 	}
 
-	response_body[body_len] = '\0';
+	response_body[body_len] = '\0'; // Ensure null-termination for safety, though not strictly needed for binary copy
 
-	memcpy(response, response_body, body_len);
-	*resp_len = body_len;
+	memcpy(response, response_body, body_len); 
+	*resp_len = body_len; // Update the output length
 
 }
 
@@ -549,8 +552,8 @@ void free_response_members(Response *res) {
     if (res == NULL) return;
 
     free(res->content_type);
-    free(res->status_msg); // status_msg might be strdup'd
-    free(res->server); // server might be strdup'd if not constant
+    free(res->status_msg); 
+    free(res->server);       
     if (res->cookies) {
         for (int i = 0; i < res->cookie_count; ++i) {
             free(res->cookies[i].key);
@@ -579,26 +582,52 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
 	}
 
 	Request *req = (Request*)malloc(sizeof(Request));
+	if (req == NULL) {
+		perror("malloc failed for Request in HandleRequest");
+		return; // Cannot proceed without request object
+	}
 	memset(req, 0, sizeof(Request));
+
 	Response *resp=(Response*)malloc(sizeof(Response));
+	if (resp == NULL) {
+		perror("malloc failed for Response in HandleRequest");
+		free(req); // Clean up request object
+		return; // Cannot proceed without response object
+	}
 	memset(resp, 0, sizeof(Response));
 
     req->server_info = server_info;
 
 	int ERR_PARSE=PacketToRequestObject(request, req_len, req);
 
+	// Initialize response members with strdup to ensure they are on the heap
 	resp->status_code = 200;
-	resp->status_msg = "OK";
-	resp->content_type = "text/html";
+	resp->status_msg = strdup("OK"); 
+	resp->content_type = strdup("text/html"); 
 	resp->body_len = 0;
 	resp->body = NULL;
-	resp->server = SERVER_MOTD_TO_CLIENT;
+	resp->server = strdup(SERVER_MOTD_TO_CLIENT); 
 	resp->keep_alive = false;
 	resp->cookie_count = 0;
 	resp->cookies = NULL;
 	resp->header_count = 0;
 	resp->headers = NULL;
 	resp->content_length = 0;
+
+    // Check for strdup failures during response initialization
+    if (!resp->status_msg || !resp->content_type || !resp->server) {
+        perror("strdup failed during response initialization in HandleRequest");
+        // Attempt to clean up already strdup'd parts
+        free(resp->status_msg);
+        free(resp->content_type);
+        free(resp->server);
+        free_response_members(resp); // Free any other allocated parts of resp
+        free(resp);
+        free_request_members(req); // Free any allocated parts of req
+        free(req);
+        return; // Critical failure, cannot proceed
+    }
+
 
 	if(ERR_PARSE==0 && req->path != NULL)
 	{
@@ -624,11 +653,21 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
                 case HANDLER_PREFIX:
                 {
                     size_t prefix_len = strlen(handlers[i].metadata.path);
+                    // 检查请求路径是否以前缀路径开始
                     if (strncmp(req->path, handlers[i].metadata.path, prefix_len) == 0) {
-                        if (req->path[prefix_len] == '\0' || req->path[prefix_len] == '/') {
+                        // 特殊处理根路径 "/" 作为前缀
+                        if (strcmp(handlers[i].metadata.path, "/") == 0) {
                             current_handler_meta = &handlers[i].metadata;
                             current_handler = handlers[i].handler;
                             match_found = true;
+                        } else {
+                            // 对于非根路径前缀，确保前缀后是字符串结束符或斜杠
+                            // 这可以防止 "/test" 匹配到 "/testing"
+                            if (req->path[prefix_len] == '\0' || req->path[prefix_len] == '/') {
+                                current_handler_meta = &handlers[i].metadata;
+                                current_handler = handlers[i].handler;
+                                match_found = true;
+                            }
                         }
                     }
                     break;
@@ -701,21 +740,40 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
     else 
     {
 		resp->status_code = 400;
-		resp->status_msg = "Bad Request";
-		resp->content_type = "text/html";
+		// If parsing failed or path is NULL, ensure status_msg and content_type are set
+		// They are already strdup'd "OK" and "text/html" from initialization, so just update values.
+		free(resp->status_msg); // Free the default "OK"
+		resp->status_msg = strdup("Bad Request");
+		free(resp->content_type); // Free the default "text/html"
+		resp->content_type = strdup("text/html"); // Keep as text/html
+		
 		resp->body_len = 0;
-		resp->body = NULL;
+		if (resp->body) { // If body was somehow allocated, free it
+			free(resp->body);
+			resp->body = NULL;
+		}
 	}
-	size_t response_size = CACHE_SIZE;
+	size_t response_size = CACHE_SIZE; // Use CACHE_SIZE as initial buffer size
 	char *response_body = (char *)malloc(response_size);
-	ResponseObjectToPacket(resp, response_body, &response_size);
-	size_t body_len = strlen(response_body);
+	if (response_body == NULL) {
+		perror("malloc failed for response_body in HandleRequest");
+		free_response_members(resp);
+		free(resp);
+		free_request_members(req);
+		free(req);
+		return;
+	}
 
-	memcpy(response, response_body, body_len);
-	*resp_len = body_len;
+	ResponseObjectToPacket(resp, response_body, &response_size); // response_size will be updated with actual length
+
+	memcpy(response, response_body, response_size); 
+	*resp_len = response_size; // Update the output length
 
 	free(response_body);
 	
+    // Free dynamically allocated members of Request and Response
+    free_request_members(req);
+	free_response_members(resp);
 
 	free(resp);
 	free(req);

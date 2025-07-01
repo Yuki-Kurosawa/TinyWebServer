@@ -41,7 +41,7 @@ void InfoProcessRequest(Request *req, Response *res)
 		"<body>\n"
 		"<h1>"
 		SERVER_MOTD
-		"Info Page"
+		" Info Page"
 		"</h1>\n"
 		"<div class=\"section\">\n"
 		"<h2>Request Details</h2>\n"
