@@ -6,7 +6,6 @@
 
 #include "../common.h" 
 
-#define CACHE_SIZE 131772 // Define a cache size for the HTML body
 
 void InfoProcessRequest(Request *req, Response *res)
 {	

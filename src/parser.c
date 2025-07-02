@@ -6,13 +6,12 @@
 #include <arpa/inet.h> // For inet_ntop
 #include <netinet/in.h> // For sockaddr_in, sockaddr_in6
 
-#include "handlers/info.h" // ServerInfoHandler 的头文件
-#include "handlers/static_file.h" // 新增: StaticFileHandler 的头文件
+#include "handlers/info.h" // ServerInfoHandler のヘッダーファイル
+#include "handlers/static_file.h" // StaticFileHandler のヘッダーファイル
 
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h> // For PCRE2 regex matching
 
-#define CACHE_SIZE 131772 
 /* begin handler registrations */
 
 Handler handlers[] = {
@@ -439,70 +438,139 @@ int PacketToRequestObject(char* request_buffer, size_t req_len, Request *req)
 }
 
 
-void ResponseObjectToPacket(Response *resp, char *response, size_t *resp_len)
+// Modified: Use the provided buffer directly instead of a VLA
+void ResponseObjectToPacket(Response *resp, char *response_buffer_ptr, size_t *response_buffer_capacity)
 {
-	if(resp_len==NULL || *resp_len == 0)
-	{
-		*resp_len = 0;
-		return;
-	}
-	
-	if (resp == NULL || response == NULL) {
-		return;
-	}
+    if (response_buffer_capacity == NULL || *response_buffer_capacity == 0)
+    {
+        if (response_buffer_capacity) *response_buffer_capacity = 0;
+        return;
+    }
 
-	char response_body[*resp_len];
-	size_t body_len = 0;
+    if (resp == NULL || response_buffer_ptr == NULL) {
+        if (response_buffer_capacity) *response_buffer_capacity = 0;
+        return;
+    }
 
-	body_len += snprintf(response_body + body_len, sizeof(response_body) - body_len,
-		"HTTP/1.1 %d %s\r\n", resp->status_code, resp->status_msg ? resp->status_msg : "OK");
+    size_t current_len = 0;
+    size_t remaining_capacity = *response_buffer_capacity;
 
-	body_len += snprintf(response_body + body_len, sizeof(response_body) - body_len,
-		"Content-Type: %s\r\n", resp->content_type ? resp->content_type : "text/html");
+    // Write status line
+    int written = snprintf(response_buffer_ptr + current_len, remaining_capacity,
+                           "HTTP/1.1 %d %s\r\n", resp->status_code, resp->status_msg ? resp->status_msg : "OK");
+    if (written < 0 || (size_t)written >= remaining_capacity) { 
+        *response_buffer_capacity = current_len; // Indicate how much was written before overflow
+        return; 
+    }
+    current_len += written;
+    remaining_capacity -= written;
 
-	body_len += snprintf(response_body + body_len, sizeof(response_body) - body_len,
-		"Content-Length: %zu\r\n", resp->body_len);
+    // Write Content-Type
+    written = snprintf(response_buffer_ptr + current_len, remaining_capacity,
+                       "Content-Type: %s\r\n", resp->content_type ? resp->content_type : "text/html");
+    if (written < 0 || (size_t)written >= remaining_capacity) { 
+        *response_buffer_capacity = current_len; 
+        return; 
+    }
+    current_len += written;
+    remaining_capacity -= written;
 
-	body_len += snprintf(response_body + body_len, sizeof(response_body) - body_len,
-		"Server: %s\r\n", resp->server ? resp->server : SERVER_MOTD_TO_CLIENT);
-	
-	if (resp->cookie_count > 0 && resp->cookies != NULL) {
-		for (int i = 0; i < resp->cookie_count; i++) {
-			body_len += snprintf(response_body + body_len, sizeof(response_body) - body_len,
-				"Set-Cookie: %s=%s\r\n", resp->cookies[i].key, resp->cookies[i].value);
-		}
-	}
+    // Write Content-Length
+    written = snprintf(response_buffer_ptr + current_len, remaining_capacity,
+                       "Content-Length: %zu\r\n", resp->body_len);
+    if (written < 0 || (size_t)written >= remaining_capacity) { 
+        *response_buffer_capacity = current_len; 
+        return; 
+    }
+    current_len += written;
+    remaining_capacity -= written;
 
-	if (resp->header_count > 0 && resp->headers != NULL) {
-		for (int i = 0; i < resp->header_count; i++) {
-			body_len += snprintf(response_body + body_len, sizeof(response_body) - body_len,	
-				"%s: %s\r\n", resp->headers[i].key, resp->headers[i].value);
-		}
-	}
+    // Write Server header
+    written = snprintf(response_buffer_ptr + current_len, remaining_capacity,
+                       "Server: %s\r\n", resp->server ? resp->server : SERVER_MOTD_TO_CLIENT);
+    if (written < 0 || (size_t)written >= remaining_capacity) { 
+        *response_buffer_capacity = current_len; 
+        return; 
+    }
+    current_len += written;
+    remaining_capacity -= written;
+    
+    // Write Set-Cookie headers
+    if (resp->cookie_count > 0 && resp->cookies != NULL) {
+        for (int i = 0; i < resp->cookie_count; i++) {
+            written = snprintf(response_buffer_ptr + current_len, remaining_capacity,
+                               "Set-Cookie: %s=%s\r\n", resp->cookies[i].key, resp->cookies[i].value);
+            if (written < 0 || (size_t)written >= remaining_capacity) { 
+                *response_buffer_capacity = current_len; 
+                return; 
+            }
+            current_len += written;
+            remaining_capacity -= written;
+        }
+    }
 
-	if (resp->keep_alive) {
-		body_len += snprintf(response_body + body_len, sizeof(response_body) - body_len,
-			"Connection: keep-alive\r\n");		
-	} else {
-		body_len += snprintf(response_body + body_len, sizeof(response_body) - body_len,
-			"Connection: close\r\n");
-	}
+    // Write generic headers
+    if (resp->header_count > 0 && resp->headers != NULL) {
+        for (int i = 0; i < resp->header_count; i++) {
+            written = snprintf(response_buffer_ptr + current_len, remaining_capacity,    
+                               "%s: %s\r\n", resp->headers[i].key, resp->headers[i].value);
+            if (written < 0 || (size_t)written >= remaining_capacity) { 
+                *response_buffer_capacity = current_len; 
+                return; 
+            }
+            current_len += written;
+            remaining_capacity -= written;
+        }
+    }
 
-	body_len += snprintf(response_body + body_len, sizeof(response_body) - body_len, "\r\n");
+    // Write Connection header
+    if (resp->keep_alive) {
+        written = snprintf(response_buffer_ptr + current_len, remaining_capacity,
+                           "Connection: keep-alive\r\n");        
+    } else {
+        written = snprintf(response_buffer_ptr + current_len, remaining_capacity,
+                           "Connection: close\r\n");
+    }
+    if (written < 0 || (size_t)written >= remaining_capacity) { 
+        *response_buffer_capacity = current_len; 
+        return; 
+    }
+    current_len += written;
+    remaining_capacity -= written;
 
-	if (resp->body != NULL && resp->body_len > 0) {
-		// For binary data, direct memcpy is safer than snprintf which expects C strings.
-		// However, for simplicity and assuming mostly text/HTML, snprintf is used here.
-		// If actual binary files are served, this part needs careful handling to avoid issues with null bytes.
-		memcpy(response_body + body_len, resp->body, resp->body_len);
-		body_len += resp->body_len;
-	}
+    // End of headers
+    written = snprintf(response_buffer_ptr + current_len, remaining_capacity, "\r\n");
+    if (written < 0 || (size_t)written >= remaining_capacity) { 
+        *response_buffer_capacity = current_len; 
+        return; 
+    }
+    current_len += written;
+    remaining_capacity -= written;
 
-	response_body[body_len] = '\0'; // Ensure null-termination for safety, though not strictly needed for binary copy
+    // Write body
+    if (resp->body != NULL && resp->body_len > 0) {
+        if (resp->body_len > remaining_capacity) { 
+            // Body too large for remaining buffer, truncate or error
+            // For now, we will copy what fits and update current_len
+            memcpy(response_buffer_ptr + current_len, resp->body, remaining_capacity);
+            current_len += remaining_capacity;
+            *response_buffer_capacity = current_len; // Indicate actual written length
+            return; 
+        }
+        memcpy(response_buffer_ptr + current_len, resp->body, resp->body_len);
+        current_len += resp->body_len;
+        remaining_capacity -= resp->body_len;
+    }
 
-	memcpy(response, response_body, body_len); 
-	*resp_len = body_len; // Update the output length
+    // Ensure null-termination (for safety, though not strictly needed for binary copy)
+    if (current_len < *response_buffer_capacity) {
+        response_buffer_ptr[current_len] = '\0';
+    } else {
+        // If buffer is exactly full, cannot null-terminate.
+        // This is fine as long as the receiver respects Content-Length.
+    }
 
+    *response_buffer_capacity = current_len; // Update actual length written
 }
 
 // Helper function to free Request struct's dynamically allocated members
@@ -653,16 +721,16 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
                 case HANDLER_PREFIX:
                 {
                     size_t prefix_len = strlen(handlers[i].metadata.path);
-                    // 检查请求路径是否以前缀路径开始
+                    // 检查请求パスがプレフィックスパスで始まるか確認
                     if (strncmp(req->path, handlers[i].metadata.path, prefix_len) == 0) {
-                        // 特殊处理根路径 "/" 作为前缀
+                        // ルートパス "/" をプレフィックスとして特別に処理
                         if (strcmp(handlers[i].metadata.path, "/") == 0) {
                             current_handler_meta = &handlers[i].metadata;
                             current_handler = handlers[i].handler;
                             match_found = true;
                         } else {
-                            // 对于非根路径前缀，确保前缀后是字符串结束符或斜杠
-                            // 这可以防止 "/test" 匹配到 "/testing"
+                            // ルート以外のプレフィックスの場合、プレフィックスの後に文字列終端またはスラッシュが続くことを確認
+                            // これにより "/test" が "/testing" にマッチするのを防ぐ
                             if (req->path[prefix_len] == '\0' || req->path[prefix_len] == '/') {
                                 current_handler_meta = &handlers[i].metadata;
                                 current_handler = handlers[i].handler;
@@ -698,7 +766,7 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
                     re = pcre2_compile(pattern, PCRE2_ZERO_TERMINATED, 0, &errorcode, &erroroffset, NULL);
                     if (re == NULL) {
                         PCRE2_UCHAR buffer[256];
-                        pcre2_get_error_message(errorcode, buffer, sizeof(buffer));
+                        pcre2_get_error_message(rc, buffer, sizeof(buffer));
                         fprintf(stderr, "PCRE2 compilation failed at offset %lu: %s\n", erroroffset, buffer);
                         break; 
                     }
@@ -753,6 +821,9 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
 			resp->body = NULL;
 		}
 	}
+
+	fprintf(stderr, "DEBUG: HandleRequest-build packets: Response status code: %d\n", resp->status_code);
+
 	size_t response_size = CACHE_SIZE; // Use CACHE_SIZE as initial buffer size
 	char *response_body = (char *)malloc(response_size);
 	if (response_body == NULL) {
@@ -764,17 +835,29 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
 		return;
 	}
 
+	fprintf(stderr, "DEBUG: HandleRequest-malloc packets: Response status code: %d\n", resp->status_code);
+
 	ResponseObjectToPacket(resp, response_body, &response_size); // response_size will be updated with actual length
+
+	fprintf(stderr, "DEBUG: HandleRequest-cast to packets: Response size: %ld\n", response_size);
 
 	memcpy(response, response_body, response_size); 
 	*resp_len = response_size; // Update the output length
 
+	fprintf(stderr, "DEBUG: HandleRequest-memcpy response: Response size: %ld\n", response_size);
+
+	fprintf(stderr, "DEBUG: HandleRequest: Freeing response_body (%p)\n", (void*)response_body);
 	free(response_body);
 	
     // Free dynamically allocated members of Request and Response
+    fprintf(stderr, "DEBUG: HandleRequest: Calling free_request_members...\n");
     free_request_members(req);
+    fprintf(stderr, "DEBUG: HandleRequest: Calling free_response_members...\n");
 	free_response_members(resp);
 
+    fprintf(stderr, "DEBUG: HandleRequest: Freeing resp (%p)\n", (void*)resp);
 	free(resp);
+    fprintf(stderr, "DEBUG: HandleRequest: Freeing req (%p)\n", (void*)req);
 	free(req);
+    fprintf(stderr, "DEBUG: HandleRequest: All memory freed for this request.\n");
 }

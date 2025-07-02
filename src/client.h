@@ -14,7 +14,6 @@
 
 // Common constants
 #define MAX_REQUEST_SIZE 8192 // Maximum size of the incoming request to read
-#define BUFFER_SIZE 1024      // General buffer size
 #define MAX_LINE_SIZE 256     // Max line for config parsing
 #define PATH_MAX_LEN 4096     // Max file path length
 

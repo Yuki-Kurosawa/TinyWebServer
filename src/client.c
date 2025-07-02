@@ -1,16 +1,17 @@
 // client.c
 #include "client.h" // Include our own header (which now includes parser.h)
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <pthread.h>
+#include <stdlib.h> // For malloc, free, perror
+#include <string.h> // For memset, strlen, strstr, strchr, strncpy, strcmp, strcpy
+#include <unistd.h> // For close, read, write
+#include <pthread.h> // For pthread_exit
 #include <errno.h>        // For errno
-#include <fcntl.h>        // For fcntl (setting non-blocking)
+#include <fcntl.h>        // For fcntl (setting non-blocking) - though select is used for timeout
 #include <sys/time.h>     // For struct timeval
 #include <openssl/err.h>  // For SSL_get_error and ERR_print_errors_fp
 #include <arpa/inet.h>    // For inet_ntop
 #include <netinet/in.h>   // For sockaddr_in, sockaddr_in6
+#include <sys/socket.h>   // For getsockname, setsockopt, SOL_SOCKET, SO_RCVTIMEO
 
 
 // Function to find a site based on hostname
@@ -74,8 +75,30 @@ void *handle_client(void *thread_args_ptr) {
     bool use_ssl = listener->config.ssl_enabled;
     SiteConfig *active_site = NULL; // This will hold the dynamically selected SiteConfig
 
-    char response_buffer[MAX_REQUEST_SIZE + BUFFER_SIZE]; // Give some extra room for headers
+    // --- Allocate buffers on the heap to avoid stack overflow ---
+    // MAX_REQUEST_SIZE for request buffer (for headers, POST body will be handled by parser)
+    // CACHE_SIZE (from parser.h) for response buffer (to hold full response including file content)
+    char *request_buffer = (char *)malloc(MAX_REQUEST_SIZE + 1); // +1 for null terminator
+    char *response_buffer = (char *)malloc(MAX_REQUEST_SIZE+CACHE_SIZE); 
+
+    if (!request_buffer) {
+        perror("Failed to allocate request_buffer in handle_client");
+        close(sock);
+        pthread_exit(NULL);
+    }
+    if (!response_buffer) {
+        perror("Failed to allocate response_buffer in handle_client");
+        free(request_buffer); // Clean up already allocated request buffer
+        close(sock);
+        pthread_exit(NULL);
+    }
+    
+    // Initialize buffers to zero
+    memset(request_buffer, 0, MAX_REQUEST_SIZE + 1);
+    memset(response_buffer, 0, MAX_REQUEST_SIZE+CACHE_SIZE);
+
     size_t actual_response_len = 0; // This will be filled by HandleRequest
+
 
     // --- PERFORM SSL HANDSHAKE IMMEDIATELY IF SSL IS ENABLED ---
     if (use_ssl) {
@@ -86,6 +109,8 @@ void *handle_client(void *thread_args_ptr) {
             ERR_print_errors_fp(stderr);
             fprintf(stderr, "Error creating SSL object for socket %d.\n", sock);
             close(sock);
+            free(request_buffer); // Clean up
+            free(response_buffer); // Clean up
             pthread_exit(NULL);
         }
         SSL_set_fd(ssl, sock);
@@ -97,6 +122,8 @@ void *handle_client(void *thread_args_ptr) {
             ERR_print_errors_fp(stderr); // Print OpenSSL error stack
             close(sock);
             SSL_free(ssl);
+            free(request_buffer); // Clean up
+            free(response_buffer); // Clean up
             pthread_exit(NULL);
         }
         fprintf(stderr, "SSL handshake successful for socket %d.\n", sock);
@@ -105,7 +132,6 @@ void *handle_client(void *thread_args_ptr) {
 
 
     // --- Read the HTTP Request (using SSL_read or read) ---
-    char request_buffer[MAX_REQUEST_SIZE] = {0};
     ssize_t bytes_received = 0;
     ssize_t total_bytes_received = 0;
 
@@ -163,6 +189,8 @@ void *handle_client(void *thread_args_ptr) {
         fprintf(stderr, "No data received or connection closed immediately for socket %d.\n", sock);
         if (use_ssl) SSL_free(ssl);
         close(sock);
+        free(request_buffer); // Clean up
+        free(response_buffer); // Clean up
         pthread_exit(NULL);
     }
 
@@ -198,6 +226,8 @@ void *handle_client(void *thread_args_ptr) {
         else write(sock, error_response, strlen(error_response));
         if (use_ssl) SSL_free(ssl);
         close(sock);
+        free(request_buffer); // Clean up
+        free(response_buffer); // Clean up
         pthread_exit(NULL);
     }
 
@@ -211,6 +241,8 @@ void *handle_client(void *thread_args_ptr) {
         else write(sock, error_response, strlen(error_response));
         if (use_ssl) SSL_free(ssl);
         close(sock);
+        free(request_buffer); // Clean up
+        free(response_buffer); // Clean up
         pthread_exit(NULL);
     }
     memset(server_info, 0, sizeof(ServerInfo));
@@ -231,11 +263,37 @@ void *handle_client(void *thread_args_ptr) {
             strcpy(server_ip_str, "N/A");
             server_info->server_port = 0;
         }
-        server_info->server_ip = strdup(server_ip_str);
+        server_info->server_ip = strdup(server_ip_str); // Duplicate for parser.c to free
+        if (!server_info->server_ip) {
+            perror("strdup failed for server_ip in client.c");
+            // Handle error, send 500 or exit thread
+            const char* error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nServer out of memory.";
+            if (use_ssl) SSL_write(ssl, error_response, strlen(error_response));
+            else write(sock, error_response, strlen(error_response));
+            if (use_ssl) SSL_free(ssl);
+            close(sock);
+            free(request_buffer);
+            free(response_buffer);
+            free(server_info); // Free server_info if strdup failed
+            pthread_exit(NULL);
+        }
     } else {
         perror("getsockname failed for server IP in client.c");
         server_info->server_ip = strdup("N/A");
         server_info->server_port = 0;
+        if (!server_info->server_ip) { // Check strdup failure even for N/A
+            perror("strdup failed for server_ip N/A in client.c");
+            // Handle error, send 500 or exit thread
+            const char* error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nServer out of memory.";
+            if (use_ssl) SSL_write(ssl, error_response, strlen(error_response));
+            else write(sock, error_response, strlen(error_response));
+            if (use_ssl) SSL_free(ssl);
+            close(sock);
+            free(request_buffer);
+            free(response_buffer);
+            free(server_info); // Free server_info if strdup failed
+            pthread_exit(NULL);
+        }
     }
 
     // Get remote IP and port (client's address)
@@ -244,21 +302,45 @@ void *handle_client(void *thread_args_ptr) {
         if (remote_addr.ss_family == AF_INET) {
             inet_ntop(AF_INET, &((struct sockaddr_in*)&remote_addr)->sin_addr, remote_ip_str, sizeof(remote_ip_str));
             server_info->remote_port = ntohs(((struct sockaddr_in*)&remote_addr)->sin_port);
-            //fprintf(stderr, "Debug: Remote IPv4: %s:%d\n", remote_ip_str, server_info->remote_port);
         } else if (remote_addr.ss_family == AF_INET6) {
             inet_ntop(AF_INET6, &((struct sockaddr_in6*)&remote_addr)->sin6_addr, remote_ip_str, sizeof(remote_ip_str));
             server_info->remote_port = ntohs(((struct sockaddr_in6*)&remote_addr)->sin6_port);
-            //fprintf(stderr, "Debug: Remote IPv6: %s:%d\n", remote_ip_str, server_info->remote_port);
         } else {
             strcpy(remote_ip_str, "N/A");
             server_info->remote_port = 0;
-            //fprintf(stderr, "Debug: Remote IP: N/A (Unknown family %d)\n", remote_addr.ss_family);
         }
-        server_info->remote_ip = strdup(remote_ip_str);
+        server_info->remote_ip = strdup(remote_ip_str); // Duplicate for parser.c to free
+        if (!server_info->remote_ip) {
+            perror("strdup failed for remote_ip in client.c");
+            // Handle error, send 500 or exit thread
+            const char* error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nServer out of memory.";
+            if (use_ssl) SSL_write(ssl, error_response, strlen(error_response));
+            else write(sock, error_response, strlen(error_response));
+            if (use_ssl) SSL_free(ssl);
+            close(sock);
+            free(request_buffer);
+            free(response_buffer);
+            free(server_info->server_ip); // Free server_ip if it was allocated
+            free(server_info); // Free server_info if strdup failed
+            pthread_exit(NULL);
+        }
     } else {
         server_info->remote_ip = strdup("N/A");
         server_info->remote_port = 0;
-        //fprintf(stderr, "Debug: Remote IP: N/A (remote_addr_len is 0)\n");
+        if (!server_info->remote_ip) { // Check strdup failure even for N/A
+            perror("strdup failed for remote_ip N/A in client.c");
+            // Handle error, send 500 or exit thread
+            const char* error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nServer out of memory.";
+            if (use_ssl) SSL_write(ssl, error_response, strlen(error_response));
+            else write(sock, error_response, strlen(error_response));
+            if (use_ssl) SSL_free(ssl);
+            close(sock);
+            free(request_buffer);
+            free(response_buffer);
+            free(server_info->server_ip); // Free server_ip if it was allocated
+            free(server_info); // Free server_info if strdup failed
+            pthread_exit(NULL);
+        }
     }
     
     server_info->root_dir = active_site->root_dir; // This is a pointer, not a copy. Ownership remains with SiteConfig.
@@ -271,11 +353,12 @@ void *handle_client(void *thread_args_ptr) {
                 &actual_response_len, response_buffer);
 
     // server_info and its strdup'd members are freed by free_request_members in parser.c
+    // Note: response_buffer is now heap-allocated in this function and will be freed here.
 
     if (use_ssl) {
         if (SSL_write(ssl, response_buffer, actual_response_len) <= 0) {
             ERR_print_errors_fp(stderr);
-            fprintf(stderr, "SSL_write error for socket %d.\n", sock);
+            fprintf(stderr, "SSL_write error for socket %d.\\n", sock);
         }
     } else {
         if (write(sock, response_buffer, actual_response_len) <= 0) {
@@ -289,6 +372,10 @@ void *handle_client(void *thread_args_ptr) {
         SSL_free(ssl);     // Free the SSL object
     }
     close(sock); // Close the underlying socket
+
+    // Free heap-allocated buffers
+    free(request_buffer);
+    free(response_buffer);
 
     pthread_exit(NULL); // Exit the thread
 }

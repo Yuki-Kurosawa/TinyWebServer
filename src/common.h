@@ -3,5 +3,6 @@
 
 #define SERVER_MOTD "Tiny Web Server"
 #define SERVER_MOTD_TO_CLIENT "Microsoft-IIS/10.0 Ubuntu/24.04"
+#define CACHE_SIZE 131072*1024 // 128MiB
 
 #endif // COMMON_H
