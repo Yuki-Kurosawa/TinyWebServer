@@ -8,6 +8,7 @@
 
 #include "handlers/info.h" // ServerInfoHandler のヘッダーファイル
 #include "handlers/static_file.h" // StaticFileHandler のヘッダーファイル
+#include "handlers/dynamic_handler.h" // DynamicAPIHandler のヘッダーファイル
 
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h> // For PCRE2 regex matching
@@ -16,6 +17,30 @@
 
 Handler handlers[] = {
 	{ {"ServerInfoHandler",".info", HANDLER_SUFFIX}, InfoProcessRequest }, 
+
+	/* Begin tons of dynamic handlers */
+	{ {"DynamicAPIHandler", ".do", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
+
+	{ {"DynamicAPIHandler", ".aspx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
+	{ {"DynamicAPIHandler", ".ashx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
+	{ {"DynamicAPIHandler", ".asmx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
+
+	{ {"DynamicAPIHandler", ".php", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
+	{ {"DynamicAPIHandler", ".asp", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
+
+	{ {"DynamicAPIHandler", ".jsp", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
+	{ {"DynamicAPIHandler", ".jspx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
+	{ {"DynamicAPIHandler", ".action", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
+
+	{ {"DynamicAPIHandler", ".py", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
+	{ {"DynamicAPIHandler", ".rb", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
+
+	{ {"DynamicAPIHandler", ".pl", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
+	{ {"DynamicAPIHandler", ".cgi", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
+	{ {"DynamicAPIHandler", ".fcgi", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
+
+	/* End tons of dynamic handlers */
+
 	{ {"StaticFileHandler","/", HANDLER_PREFIX}, StaticFileProcessRequest }, 
 	// StaticFileHandler is always the last handler
 	{ NULL, NULL } // End marker for the handlers array
@@ -705,6 +730,7 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
 
 		for (int i = 0; handlers[i].metadata.path != NULL; i++) 
         {            
+			printf("Checking handler %d: %s %s\n", i, handlers[i].metadata.name,handlers[i].metadata.path);
             switch(handlers[i].metadata.type)
             {
                 case HANDLER_STATIC:                    
@@ -714,6 +740,7 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
                         current_handler_meta = &handlers[i].metadata;
                         current_handler = handlers[i].handler;
                         match_found = true;
+						printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
                         break;
                     }
                     break;
@@ -727,14 +754,18 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
                         if (strcmp(handlers[i].metadata.path, "/") == 0) {
                             current_handler_meta = &handlers[i].metadata;
                             current_handler = handlers[i].handler;
-                            match_found = true;
+                            match_found = true;							
+							printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
+							break;
                         } else {
                             // ルート以外のプレフィックスの場合、プレフィックスの後に文字列終端またはスラッシュが続くことを確認
                             // これにより "/test" が "/testing" にマッチするのを防ぐ
                             if (req->path[prefix_len] == '\0' || req->path[prefix_len] == '/') {
                                 current_handler_meta = &handlers[i].metadata;
                                 current_handler = handlers[i].handler;
-                                match_found = true;
+                                match_found = true;								
+								printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
+								break;
                             }
                         }
                     }
@@ -750,7 +781,10 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
                             current_handler_meta = &handlers[i].metadata;
                             current_handler = handlers[i].handler;
                             match_found = true;
+							printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
+							break;
                         }
+					
                     break;
                 }
                 case HANDLER_REGEX:
@@ -793,9 +827,15 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
 
                     pcre2_match_data_free(match_data);
                     pcre2_code_free(re);
+					printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
                     break;
                 }
 		    }
+
+			if(match_found)
+			{
+				break;
+			}
 	    } 
             
         if (match_found) 
@@ -822,8 +862,6 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
 		}
 	}
 
-	fprintf(stderr, "DEBUG: HandleRequest-build packets: Response status code: %d\n", resp->status_code);
-
 	size_t response_size = CACHE_SIZE; // Use CACHE_SIZE as initial buffer size
 	char *response_body = (char *)malloc(response_size);
 	if (response_body == NULL) {
@@ -835,29 +873,17 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
 		return;
 	}
 
-	fprintf(stderr, "DEBUG: HandleRequest-malloc packets: Response status code: %d\n", resp->status_code);
-
 	ResponseObjectToPacket(resp, response_body, &response_size); // response_size will be updated with actual length
-
-	fprintf(stderr, "DEBUG: HandleRequest-cast to packets: Response size: %ld\n", response_size);
 
 	memcpy(response, response_body, response_size); 
 	*resp_len = response_size; // Update the output length
 
-	fprintf(stderr, "DEBUG: HandleRequest-memcpy response: Response size: %ld\n", response_size);
-
-	fprintf(stderr, "DEBUG: HandleRequest: Freeing response_body (%p)\n", (void*)response_body);
 	free(response_body);
 	
     // Free dynamically allocated members of Request and Response
-    fprintf(stderr, "DEBUG: HandleRequest: Calling free_request_members...\n");
     free_request_members(req);
-    fprintf(stderr, "DEBUG: HandleRequest: Calling free_response_members...\n");
 	free_response_members(resp);
 
-    fprintf(stderr, "DEBUG: HandleRequest: Freeing resp (%p)\n", (void*)resp);
 	free(resp);
-    fprintf(stderr, "DEBUG: HandleRequest: Freeing req (%p)\n", (void*)req);
 	free(req);
-    fprintf(stderr, "DEBUG: HandleRequest: All memory freed for this request.\n");
 }
