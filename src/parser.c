@@ -770,7 +770,7 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
 
 		for (int i = 0; handlers[i].metadata.path != NULL; i++) 
         {            
-			printf("Checking handler %d: %s %s\n", i, handlers[i].metadata.name,handlers[i].metadata.path);
+			//printf("Checking handler %d: %s %s\n", i, handlers[i].metadata.name,handlers[i].metadata.path);
             switch(handlers[i].metadata.type)
             {
                 case HANDLER_STATIC:                    
@@ -780,7 +780,7 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
                         current_handler_meta = &handlers[i].metadata;
                         current_handler = handlers[i].handler;
                         match_found = true;
-						printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
+						//printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
                         break;
                     }
                     break;
@@ -795,7 +795,7 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
                             current_handler_meta = &handlers[i].metadata;
                             current_handler = handlers[i].handler;
                             match_found = true;							
-							printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
+							//printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
 							break;
                         } else {
                             // ルート以外のプレフィックスの場合、プレフィックスの後に文字列終端またはスラッシュが続くことを確認
@@ -804,7 +804,7 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
                                 current_handler_meta = &handlers[i].metadata;
                                 current_handler = handlers[i].handler;
                                 match_found = true;								
-								printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
+								//printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
 								break;
                             }
                         }
@@ -821,7 +821,7 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
                             current_handler_meta = &handlers[i].metadata;
                             current_handler = handlers[i].handler;
                             match_found = true;
-							printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
+							//printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
 							break;
                         }
 					
@@ -867,7 +867,7 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
 
                     pcre2_match_data_free(match_data);
                     pcre2_code_free(re);
-					printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
+					//printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
                     break;
                 }
 		    }
