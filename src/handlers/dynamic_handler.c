@@ -8,6 +8,7 @@
 #include <sys/stat.h> // For stat() and S_ISREG()
 #include <unistd.h>   // For access()
 #include <errno.h>    // For errno
+#include <dlfcn.h>    // NEW: For dynamic library loading (dlopen, dlsym, dlclose)
 
 #include "../common.h" // 包含通用定义和宏，例如 CACHE_SIZE
 
@@ -165,70 +166,67 @@ void DynamicHandlerProcessRequest(Request *req, Response *res) {
         return;
     }
 
-    // 为HTML响应体分配内存
-    char *html_body = (char*)malloc(CACHE_SIZE);
-    if (html_body == NULL) {
-        perror("malloc failed for html_body in DynamicHandlerProcessRequest");
-        // 设置500 Internal Server Error响应
-        res->status_code = 500;
+    // NEW: 动态加载 .so 文件并查找 ProcessRequest 函数
+    void *handle = dlopen(file_to_serve, RTLD_LAZY);
+    if (!handle) {
+        fprintf(stderr, "DynamicHandlerProcessRequest: Failed to open shared library '%s': %s\n", file_to_serve, dlerror());
         if (res->status_msg) free(res->status_msg);
-        res->status_msg = strdup("Internal Server Error");
         if (res->content_type) free(res->content_type);
         if (res->body) free(res->body);
-        res->body = strdup("Internal Server Error: Could not allocate memory for response body.");
-        res->body_len = strlen(res->body);
+
+        res->status_code = 500;
+        res->status_msg = strdup("Internal Server Error");
+        res->content_type = strdup("text/html");
+        char *error_body = (char*)malloc(CACHE_SIZE); // Re-use CACHE_SIZE for error body
+        if (error_body) {
+            snprintf(error_body, CACHE_SIZE,
+                     "<html><body><h1>500 Internal Server Error</h1><p>Failed to load dynamic script: %s</p><p>Error: %s</p></body></html>",
+                     file_to_serve, dlerror());
+            res->body = error_body;
+            res->body_len = strlen(res->body);
+        } else {
+            res->body = strdup("Internal Server Error: Failed to load dynamic script.");
+            res->body_len = strlen(res->body);
+        }
         return;
     }
-    int body_len = 0;
 
-    // 获取当前服务器时间
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    time_t current_time = tv.tv_sec;
-    struct tm *local_time = localtime(&current_time);
-    char time_str[100];
-    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", local_time);
+    // 清除任何现有的 dlerror 错误，以便 dlsym 能够报告其自身的错误
+    dlerror();
+    RequestHandler dynamic_request_handler = (RequestHandler)dlsym(handle, "ProcessRequest");
+    const char *dlsym_error = dlerror(); // 获取 dlsym 错误信息
 
-    // 构建HTML响应体
-    body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
-        "<html>\n"
-        "<head>\n"
-        "<title>Dynamic Content Placeholder</title>\n"
-        "<meta charset=\"UTF-8\">\n"
-        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
-        "<style>\n"
-        "body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }\n"
-        "h1 { color: #0056b3; border-bottom: 2px solid #ddd; padding-bottom: 5px; margin-top: 20px; }\n"
-        "p { margin-bottom: 5px; }\n"
-        "strong { color: #007bff; }\n"
-        "</style>\n"
-        "</head>\n"
-        "<body>\n"
-        "<h1>Dynamic Content Placeholder</h1>\n"
-        "<p>This page is served by a dynamic content handler.</p>\n"
-        "<p><strong>Requested Path:</strong> %s</p>\n"
-        "<p><strong>Resolved Script File:</strong> %s</p>\n" // NEW: 显示找到的脚本文件
-        "<p><strong>Handler Type:</strong> Suffix Match (%s)</p>\n"
-        "<p><strong>Current Server Time:</strong> %s</p>\n",
-        req->path ? req->path : "N/A",
-        file_to_serve, // 显示实际找到的文件路径
-        dot_in_filename ? dot_in_filename : "N/A", // 提取后缀，如果存在
-        time_str);
+    if (dlsym_error) {
+        fprintf(stderr, "DynamicHandlerProcessRequest: Failed to find symbol 'ProcessRequest' in '%s': %s\n", file_to_serve, dlsym_error);
+        dlclose(handle); // 如果符号未找到，关闭句柄
+        if (res->status_msg) free(res->status_msg);
+        if (res->content_type) free(res->content_type);
+        if (res->body) free(res->body);
 
-    // 结束HTML响应体
-    body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "</body>\n</html>\n");
+        res->status_code = 500;
+        res->status_msg = strdup("Internal Server Error");
+        res->content_type = strdup("text/html");
+        char *error_body = (char*)malloc(CACHE_SIZE);
+        if (error_body) {
+             snprintf(error_body, CACHE_SIZE,
+                     "<html><body><h1>500 Internal Server Error</h1><p>Dynamic script found but 'ProcessRequest' function not found: %s</p><p>Error: %s</p></body></html>",
+                     file_to_serve, dlsym_error);
+            res->body = error_body;
+            res->body_len = strlen(res->body);
+        } else {
+            res->body = strdup("Internal Server Error: 'ProcessRequest' function not found.");
+            res->body_len = strlen(res->body);
+        }
+        return;
+    }
 
-    // 在重新分配之前，释放旧的响应字符串（如果存在）
-    if (res->status_msg) free(res->status_msg);
-    if (res->content_type) free(res->content_type);
-    if (res->body) free(res->body);
+    // 调用动态加载的函数
+    fprintf(stderr, "DynamicHandlerProcessRequest: Calling dynamically loaded ProcessRequest from '%s'\n", file_to_serve);
+    dynamic_request_handler(req, res); // 此函数将填充 req 和 res
 
-    // 设置响应参数
-    res->status_code = 200;
-    res->status_msg = strdup("OK");
-    res->content_type = strdup("text/html; charset=utf-8"); // 动态内容通常是HTML
-    res->body = html_body; // 将动态生成的HTML赋值给响应体
-    res->body_len = body_len; // 设置响应体长度
+    // 关闭共享库
+    dlclose(handle);
+    fprintf(stderr, "DynamicHandlerProcessRequest: Closed shared library '%s'\n", file_to_serve);
 
-    fprintf(stderr, "DynamicHandlerProcessRequest: Finished processing. Body length: %zu\n", res->body_len);
+    // NEW: 移除了原有的占位符 HTML 生成逻辑，因为现在由动态加载的 .so 负责填充响应。
 }

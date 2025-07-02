@@ -1,49 +1,50 @@
 #include "parser.h"
-#include <string.h> // For memcpy and strlen
-#include <stdio.h>  // For printf (if needed for debugging)
+#include <string.h> // For memcpy and strlen, strncmp, strcmp, strrchr
+#include <stdio.h>  // For printf (if needed for debugging), fprintf
 #include <stdlib.h> // For malloc and free
 #include <ctype.h>  // For isspace
 #include <arpa/inet.h> // For inet_ntop
 #include <netinet/in.h> // For sockaddr_in, sockaddr_in6
+#include <stdbool.h> // For bool
 
-#include "handlers/info.h" // ServerInfoHandler のヘッダーファイル
-#include "handlers/static_file.h" // StaticFileHandler のヘッダーファイル
-#include "handlers/dynamic_handler.h" // DynamicAPIHandler のヘッダーファイル
+#include "handlers/info.h" // ServerInfoHandler の頭ファイル
+#include "handlers/static_file.h" // StaticFileHandler の頭ファイル
+#include "handlers/dynamic_handler.h" // DynamicHandler の頭ファイル
 
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h> // For PCRE2 regex matching
 
 /* begin handler registrations */
 
+// Handlers are ordered by specificity. More specific handlers should come first.
+// StaticFileHandler with "/" prefix should always be the last as a catch-all.
 Handler handlers[] = {
-	{ {"ServerInfoHandler",".info", HANDLER_SUFFIX}, InfoProcessRequest }, 
+    { {"ServerInfoHandler",".info", HANDLER_SUFFIX}, InfoProcessRequest },
 
-	/* Begin tons of dynamic handlers */
-	{ {"DynamicAPIHandler", ".do", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
+    /* Begin tons of dynamic handlers */
+    // これらのハンドラーはすべて同じ DynamicHandlerProcessRequest 関数を指しますが、
+    // 異なるサフィックスでマッチングを行い、異なる種類の動的スクリプトをシミュレートします。
+    { {"DynamicAPIHandler", ".do", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
+    { {"DynamicAPIHandler", ".aspx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
+    { {"DynamicAPIHandler", ".ashx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
+    { {"DynamicAPIHandler", ".asmx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
+    { {"DynamicAPIHandler", ".php", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
+    { {"DynamicAPIHandler", ".asp", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
+    { {"DynamicAPIHandler", ".jsp", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
+    { {"DynamicAPIHandler", ".jspx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
+    { {"DynamicAPIHandler", ".action", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
+    { {"DynamicAPIHandler", ".py", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
+    { {"DynamicAPIHandler", ".rb", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
+    { {"DynamicAPIHandler", ".pl", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
+    { {"DynamicAPIHandler", ".cgi", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
+    { {"DynamicAPIHandler", ".fcgi", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
+    /* End tons of dynamic handlers */
 
-	{ {"DynamicAPIHandler", ".aspx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
-	{ {"DynamicAPIHandler", ".ashx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
-	{ {"DynamicAPIHandler", ".asmx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
-
-	{ {"DynamicAPIHandler", ".php", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
-	{ {"DynamicAPIHandler", ".asp", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
-
-	{ {"DynamicAPIHandler", ".jsp", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
-	{ {"DynamicAPIHandler", ".jspx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
-	{ {"DynamicAPIHandler", ".action", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
-
-	{ {"DynamicAPIHandler", ".py", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
-	{ {"DynamicAPIHandler", ".rb", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
-
-	{ {"DynamicAPIHandler", ".pl", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
-	{ {"DynamicAPIHandler", ".cgi", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
-	{ {"DynamicAPIHandler", ".fcgi", HANDLER_SUFFIX }, DynamicHandlerProcessRequest }, 
-
-	/* End tons of dynamic handlers */
-
-	{ {"StaticFileHandler","/", HANDLER_PREFIX}, StaticFileProcessRequest }, 
-	// StaticFileHandler is always the last handler
-	{ NULL, NULL } // End marker for the handlers array
+    // StaticFileHandler はプレフィックスマッチングで、パスは "/" なので、
+    // 他のハンドラーで処理されなかったすべてのリクエストをキャッチします。
+    // これは常にリストの最後に配置する必要があります。
+    { {"StaticFileHandler","/", HANDLER_PREFIX}, StaticFileProcessRequest },
+    { NULL, NULL } // End marker for the handlers array
 };
 
 /* end handler registrations */
@@ -102,9 +103,11 @@ void ParseQueryString(Request *req) {
             req->query_count++;
         } else {
             req->query[req->query_count].key = strdup(token);
-            req->query[req->query_count].value = NULL;
-            if (!req->query[req->query_count].key) {
+            // FIX: Ensure value is always a valid string, even if empty
+            req->query[req->query_count].value = strdup(""); 
+            if (!req->query[req->query_count].key || !req->query[req->query_count].value) { // Check both key and value strdup
                 perror("strdup failed for query key (no value)");
+                free(req->query[req->query_count].key); // Free key if value strdup fails
                 free(query_copy);
                 return;
             }
@@ -179,9 +182,10 @@ void ParseCookies(Request *req, const char *cookie_header_value) {
             req->cookie_count++;
         } else {
             req->cookies[req->cookie_count].key = strdup(token);
-            req->cookies[req->cookie_count].value = NULL;
-            if (!req->cookies[req->cookie_count].key) {
+            req->cookies[req->cookie_count].value = strdup(""); // FIX: Ensure value is always a valid string
+            if (!req->cookies[req->cookie_count].key || !req->cookies[req->cookie_count].value) { // Check both
                  perror("strdup failed for cookie key (no value)");
+                 free(req->cookies[req->cookie_count].key); // Free key if value strdup fails
                  free(cookie_copy);
                  return;
             }
@@ -259,9 +263,10 @@ void ParseFormData(Request *req) {
             req->form_length++;
         } else {
             req->form[req->form_length].key = strdup(token);
-            req->form[req->form_length].value = NULL;
-            if (!req->form[req->form_length].key) {
+            req->form[req->form_length].value = strdup(""); // FIX: Ensure value is always a valid string
+            if (!req->form[req->form_length].key || !req->form[req->form_length].value) { // Check both
                  perror("strdup failed for form key (no value)");
+                 free(req->form[req->form_length].key); // Free key if value strdup fails
                  free(body_copy);
                  return;
             }
@@ -316,26 +321,49 @@ int PacketToRequestObject(char* request_buffer, size_t req_len, Request *req)
     }
     *line_end = '\0';
 
-    char *method_str = strtok_r(current_pos, " ", &next_line_start);
-    char *path_and_query_str = strtok_r(NULL, " ", &next_line_start);
-    char *version_str = strtok_r(NULL, "\r\n", &next_line_start);
+    char method_buf[MAX_METHOD_LEN]; // Use temporary buffers for sscanf
+    char uri_buf[MAX_URI_LEN];
+    char version_buf[MAX_VERSION_LEN];
 
-    if (!method_str || !path_and_query_str || !version_str) {
+    // FIX: Use width specifiers to prevent buffer overflows with sscanf
+    // MAX_METHOD_LEN (10) -> %9s
+    // MAX_URI_LEN (2048) -> %2047s
+    // MAX_VERSION_LEN (10) -> %9s
+    char *first_space = strchr(current_pos, ' ');
+    char *second_space = first_space ? strchr(first_space + 1, ' ') : NULL;
+
+    if (!first_space || !second_space) {
         free(request_copy);
-        return -2;
+        return -2; // Malformed request line
     }
 
-	if (strcmp(method_str, "GET") == 0) {
+    *first_space = '\0'; // Temporarily null-terminate method
+    strncpy(method_buf, current_pos, MAX_METHOD_LEN - 1);
+    method_buf[MAX_METHOD_LEN - 1] = '\0';
+
+    *second_space = '\0'; // Temporarily null-terminate URI
+    strncpy(uri_buf, first_space + 1, MAX_URI_LEN - 1);
+    uri_buf[MAX_URI_LEN - 1] = '\0';
+    
+    strncpy(version_buf, second_space + 1, MAX_VERSION_LEN - 1);
+    version_buf[MAX_VERSION_LEN - 1] = '\0';
+
+    // Restore original string for strtok_r to continue later
+    *first_space = ' ';
+    *second_space = ' ';
+    *line_end = '\r'; // Restore the original \r\n
+
+	if (strcmp(method_buf, "GET") == 0) {
         req->method = METHOD_GET;
-    } else if (strcmp(method_str, "POST") == 0) {
+    } else if (strcmp(method_buf, "POST") == 0) {
         req->method = METHOD_POST;
     }
     else {
         free(request_copy);
-        return -3;
+        return -3; // Unsupported method
     }
 
-    req->path_and_query = strdup(path_and_query_str);
+    req->path_and_query = strdup(uri_buf); // Use uri_buf (safe)
     char *query_start = strchr(req->path_and_query, '?');
     if (query_start) {
         *query_start = '\0';
@@ -347,21 +375,21 @@ int PacketToRequestObject(char* request_buffer, size_t req_len, Request *req)
         req->query_string = NULL;
     }
 
-    if (strcmp(version_str, "HTTP/1.1") == 0) {
+    if (strcmp(version_buf, "HTTP/1.1") == 0) {
         req->version = HTTP_1_1;
-    } else if (strcmp(version_str, "HTTP/1.0") == 0) {
+    } else if (strcmp(version_buf, "HTTP/1.0") == 0) {
         req->version = HTTP_1_0;
     } else {
         free(request_copy);
-        return -4;
+        return -4; // Unsupported HTTP version
     }
 
 	ParseQueryString(req);
 
-    current_pos = line_end + 2;
+    current_pos = line_end + 2; // Move past the first line's \r\n
 
     while ( (line_end = strstr(current_pos, "\r\n")) != NULL && line_end != current_pos ) {
-        *line_end = '\0';
+        *line_end = '\0'; // Temporarily null-terminate the header line
 
         char *colon_pos = strchr(current_pos, ':');
         if (colon_pos) {
@@ -374,15 +402,19 @@ int PacketToRequestObject(char* request_buffer, size_t req_len, Request *req)
             }
 
             if (strcasecmp(header_name, "Host") == 0) {
+                // No need to free here, HandleRequest initializes and free_request_members cleans up
                 req->host = strdup(header_value);
             } else if (strcasecmp(header_name, "User-Agent") == 0) {
+                // No need to free here
                 req->user_agent = strdup(header_value);
             } else if (strcasecmp(header_name, "Content-Type") == 0) {
+                // No need to free here
                 req->content_type = strdup(header_value);
             } else if (strcasecmp(header_name, "Content-Length") == 0) {
                 req->content_length = strtol(header_value, NULL, 10);
 				req->body_len =req->content_length;
             } else if (strcasecmp(header_name, "Accept") == 0) {
+				// No need to free here
 				req->accept = strdup(header_value);
 			} else if (strcasecmp(header_name, "Cookie") == 0) {
                 ParseCookies(req, header_value);
@@ -428,26 +460,34 @@ int PacketToRequestObject(char* request_buffer, size_t req_len, Request *req)
                 }
                 req->header_count++;
             }
-            *colon_pos = ':';
+            *colon_pos = ':'; // Restore the colon
         }
 
-        current_pos = line_end + 2;
+        current_pos = line_end + 2; // Move past the current line's \r\n
     }
+
+    // After header parsing, current_pos points to the beginning of the body (if any)
+    // or the final \r\n\r\n if no body.
+    // We need to find the actual start of the body relative to request_buffer.
+    size_t header_end_offset = current_pos - request_copy;
 
     if (req->method == METHOD_POST) {
         if (req->content_length > 0) {
-			current_pos = line_end + 2;
-
-            size_t body_offset = current_pos - request_copy;
-            if (body_offset + req->content_length <= req_len) {
+            // Ensure we don't read beyond the original request_buffer length
+            if (header_end_offset + req->content_length <= req_len) {
                 req->body = (char *)malloc(req->content_length + 1);
                 if (req->body) {
-                    memcpy(req->body, current_pos, req->content_length);
+                    memcpy(req->body, request_buffer + header_end_offset, req->content_length); // Read from original buffer
                     req->body[req->content_length] = '\0';
+                } else {
+                    perror("malloc failed for req->body");
+                    free(request_copy);
+                    return -1; // Memory allocation failure
                 }
             } else {
+                fprintf(stderr, "Content-Length exceeds remaining request buffer size.\n");
                 free(request_copy);
-                return -5;
+                return -5; // Malformed request or truncated body
             }
         }
     }
@@ -843,6 +883,19 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
             printf("Handler found for path %s with \"%s\"\n", req->path, current_handler_meta->name);
             req->handler = *current_handler_meta;
             current_handler(req, resp);
+        } else {
+            // If no handler matched, return 404 Not Found
+            fprintf(stderr, "DEBUG: HandleRequest: No handler matched for path '%s'. Returning 404.\n", req->path ? req->path : "NULL");
+            // FIX: Remove free() calls here. HandleRequest initializes and free_response_members cleans up.
+            // if (resp->status_msg) free(resp->status_msg); 
+            // if (resp->content_type) free(resp->content_type);
+            // if (resp->body) free(resp->body); // This one is fine as body is NULL initially
+
+            resp->status_code = 404;
+            resp->status_msg = strdup("Not Found");
+            resp->content_type = strdup("text/html");
+            resp->body = strdup("<html><body><h1>404 Not Found</h1><p>The requested URL was not found on this server.</p></body></html>");
+            resp->body_len = strlen(resp->body);
         }
     }
     else 
@@ -850,9 +903,10 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
 		resp->status_code = 400;
 		// If parsing failed or path is NULL, ensure status_msg and content_type are set
 		// They are already strdup'd "OK" and "text/html" from initialization, so just update values.
-		free(resp->status_msg); // Free the default "OK"
+		// FIX: Remove free() calls here. HandleRequest initializes and free_response_members cleans up.
+		// free(resp->status_msg); // Free the default "OK"
 		resp->status_msg = strdup("Bad Request");
-		free(resp->content_type); // Free the default "text/html"
+		// free(resp->content_type); // Free the default "text/html"
 		resp->content_type = strdup("text/html"); // Keep as text/html
 		
 		resp->body_len = 0;

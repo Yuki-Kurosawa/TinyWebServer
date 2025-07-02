@@ -12,5 +12,12 @@ src/www.c src/client.c src/handlers/info.c \
 -pthread -lssl -lcrypto \
 -lpcre2-8 -lmagic
 
+gcc -o libtest.so -shared -fPIC \
+tests/test.c \
+-I./include
+
+file libtest.so
+sudo cp libtest.so /var/www/default/html/libtest.so
+
 
 ./www
