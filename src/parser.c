@@ -557,6 +557,8 @@ int PacketToRequestObject(char* request_buffer, size_t req_len, Request *req)
         current_pos = line_end + 2; // Move past the current line's \r\n
     }
 
+	current_pos = line_end + 2;
+	
     // After header parsing, current_pos points to the beginning of the body (if any)
     // or the final \r\n\r\n if no body.
     // We need to find the actual start of the body relative to request_buffer.
