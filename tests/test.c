@@ -37,8 +37,6 @@ void ProcessRequest(Request *req, Response *res)
     }
     int body_len = 0;
 
-	printf("%d\n",req);
-
     // Build the HTML response body
     body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
         "<html>\n"
