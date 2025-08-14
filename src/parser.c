@@ -6,44 +6,35 @@
 #include <arpa/inet.h> // For inet_ntop
 #include <netinet/in.h> // For sockaddr_in, sockaddr_in6
 #include <stdbool.h> // For bool
-// #include <string.h> // Already included above
 
-#include "handlers/info.h" // ServerInfoHandler の 頭ファイル
-#include "handlers/static_file.h" // StaticFileHandler の 頭ファイル
-#include "handlers/dynamic_handler.h" // DynamicHandler の 頭ファイル
+
+#include "handlers/info.h" 
+#include "handlers/static_file.h" 
+#include "handlers/dynamic_handler.h" 
 
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h> // For PCRE2 regex matching
 
 
-/**
- * @brief URL解码字符串。
- *
- * 此函数将URL编码的字符串解码为原始字符串。
- * 它处理百分号编码（%HH）和加号编码（+）。
- *
- * @param encoded_str 要解码的URL编码字符串。
- * @return 解码后的字符串。调用者负责使用free()释放返回的内存。\
- * 如果内存分配失败，则返回NULL。
- */
+
 char* URLDecode(const char* encoded_str) {
     if (encoded_str == NULL) {
         return NULL;
     }
 
     size_t len = strlen(encoded_str);
-    char* decoded_str = (char*)malloc(len + 1); // 最坏情况是解码后长度不变
+    char* decoded_str = (char*)malloc(len + 1); 
     if (decoded_str == NULL) {
-        perror("内存分配失败");
+        perror("memory allocation failed for decoded_str in URLDecode");
         return NULL;
     }
 
-    size_t i = 0; // 遍历encoded_str的索引
-    size_t j = 0; // 填充decoded_str的索引
+    size_t i = 0; 
+    size_t j = 0; 
 
     while (i < len) {
         if (encoded_str[i] == '%') {
-            // 处理百分号编码 %HH
+            
             if (i + 2 < len && isxdigit(encoded_str[i+1]) && isxdigit(encoded_str[i+2])) {
                 char hex[3];
                 hex[0] = encoded_str[i+1];
@@ -52,27 +43,27 @@ char* URLDecode(const char* encoded_str) {
                 decoded_str[j++] = (char)strtol(hex, NULL, 16);
                 i += 3;
             } else {
-                // 无效的百分号编码，按原样复制
+                
                 decoded_str[j++] = encoded_str[i++];
             }
         } else if (encoded_str[i] == '+') {
-            // 处理加号编码为空间
+            
             decoded_str[j++] = ' ';
             i++;
         } else {
-            // 其他字符按原样复制
+            
             decoded_str[j++] = encoded_str[i++];
         }
     }
-    decoded_str[j] = '\0'; // 终止字符串
+    decoded_str[j] = '\0'; 
 
-    // 重新调整内存大小以节省空间（可选）
+    
     char* temp = realloc(decoded_str, j + 1);
     if (temp != NULL) {
         decoded_str = temp;
     } else {
-        // realloc失败，但decoded_str仍然有效，只是可能有多余的内存
-        fprintf(stderr, "重新分配内存失败，但程序将继续。\n");
+        
+        fprintf(stderr, "realloc failed for decoded_str in URLDecode\n");
     }
 
     return decoded_str;
@@ -86,8 +77,8 @@ Handler handlers[] = {
     { {"ServerInfoHandler",".info", HANDLER_SUFFIX}, InfoProcessRequest },
 
     /* Begin tons of dynamic handlers */
-    // これらのハンドラーはすべて同じ DynamicHandlerProcessRequest 関数を指しますが、
-    // 異なるサフィックスでマッチングを行い、異なる種類の動的スクリプトをシミュレートします。
+    
+    
     { {"DynamicAPIHandler", ".do", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
     { {"DynamicAPIHandler", ".aspx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
     { {"DynamicAPIHandler", ".ashx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
@@ -105,8 +96,8 @@ Handler handlers[] = {
     /* End tons of dynamic handlers */
 
     // StaticFileHandler はプレフィックスマッチングで、パスは "/" なので、
-    // 他のハンドラーで処理されなかったすべてのリクエストをキャッチします。
-    // これは常にリストの最後に配置する必要があります。
+    
+    
     { {"StaticFileHandler","/", HANDLER_PREFIX}, StaticFileProcessRequest },
     { NULL, NULL } // End marker for the handlers array
 };
@@ -156,12 +147,12 @@ void ParseQueryString(Request *req) {
         if (eq_pos) {
             *eq_pos = '\0';
             req->query[req->query_count].key = strdup(token);
-            // 对查询参数的值进行URL解码
+            
             char *encoded_value = eq_pos + 1;
-            char *decoded_value = URLDecode(encoded_value); // 调用 URLDecode
-            req->query[req->query_count].value = decoded_value; // 存储解码后的值
+            char *decoded_value = URLDecode(encoded_value); 
+            req->query[req->query_count].value = decoded_value; 
 
-            // DEBUG PRINT: 打印解码后的查询参数值
+            
             fprintf(stderr, "DEBUG: Query Param: Key='%s', Decoded Value='%s'\n",
                     req->query[req->query_count].key,
                     req->query[req->query_count].value ? req->query[req->query_count].value : "NULL");
@@ -170,7 +161,7 @@ void ParseQueryString(Request *req) {
             if (!req->query[req->query_count].key || !req->query[req->query_count].value) {
                 perror("strdup or URLDecode failed for query key/value");
                 free(req->query[req->query_count].key);
-                free(req->query[req->query_count].value); // 即使URLDecode返回NULL也尝试释放
+                free(req->query[req->query_count].value); 
                 free(query_copy);
                 return;
             }
@@ -179,7 +170,7 @@ void ParseQueryString(Request *req) {
             req->query[req->query_count].key = strdup(token);
             // FIX: Ensure value is always a valid string, even if empty
             req->query[req->query_count].value = strdup("");
-            // DEBUG PRINT: 打印解码后的查询参数值 (无值情况)
+            
             fprintf(stderr, "DEBUG: Query Param: Key='%s', Decoded Value='(empty)'\n",
                     req->query[req->query_count].key);
 
@@ -330,12 +321,12 @@ void ParseFormData(Request *req) {
         if (eq_pos) {
             *eq_pos = '\0';
             req->form[req->form_length].key = strdup(token);
-            // 对表单字段的值进行URL解码
+            
             char *encoded_value = eq_pos + 1;
-            char *decoded_value = URLDecode(encoded_value); // 调用 URLDecode
-            req->form[req->form_length].value = decoded_value; // 存储解码后的值
+            char *decoded_value = URLDecode(encoded_value); 
+            req->form[req->form_length].value = decoded_value; 
 
-            // DEBUG PRINT: 打印解码后的表单字段值
+            
             fprintf(stderr, "DEBUG: Form Field: Key='%s', Decoded Value='%s'\n",
                     req->form[req->form_length].key,
                     req->form[req->form_length].value ? req->form[req->form_length].value : "NULL");
@@ -343,7 +334,7 @@ void ParseFormData(Request *req) {
             if (!req->form[req->form_length].key || !req->form[req->form_length].value) {
                  perror("strdup or URLDecode failed for form key/value");
                  free(req->form[req->form_length].key);
-                 free(req->form[req->form_length].value); // 即使URLDecode返回NULL也尝试释放
+                 free(req->form[req->form_length].value); 
                  free(body_copy);
                  return;
             }
@@ -351,7 +342,7 @@ void ParseFormData(Request *req) {
         } else {
             req->form[req->form_length].key = strdup(token);
             req->form[req->form_length].value = strdup(""); // FIX: Ensure value is always a valid string
-            // DEBUG PRINT: 打印解码后的表单字段值 (无值情况)
+            
             fprintf(stderr, "DEBUG: Form Field: Key='%s', Decoded Value='(empty)'\n",
                     req->form[req->form_length].key);
 
@@ -475,7 +466,7 @@ int PacketToRequestObject(char* request_buffer, size_t req_len, Request *req)
         return -4; // Unsupported HTTP version
     }
 
-	ParseQueryString(req); // 调用 ParseQueryString 来解析并解码查询字符串
+	ParseQueryString(req); 
 
     current_pos = line_end + 2; // Move past the first line's \r\n
 
@@ -583,13 +574,13 @@ int PacketToRequestObject(char* request_buffer, size_t req_len, Request *req)
                     memcpy(req->body, body_start_in_original_buffer, req->content_length); // Read from original buffer
                     req->body[req->content_length] = '\0';
 
-                    // DEBUG PRINT: 打印原始请求体内容和长度 (十六进制)
+                    
                     fprintf(stderr, "DEBUG: Raw Request Body (Hex) - Length: %zu, Content: '", req->body_len);
                     for (size_t k = 0; k < req->body_len; ++k) {
                         fprintf(stderr, "%%%02X", (unsigned char)req->body[k]);
                     }
                     fprintf(stderr, "'\n");
-                    // DEBUG PRINT: 打印原始请求体内容 (字符串形式，可能乱码)
+                    
                     fprintf(stderr, "DEBUG: Raw Request Body (String) - Length: %zu, Content: '%s'\n", req->body_len, req->body);
 
                 } else {
@@ -608,7 +599,7 @@ int PacketToRequestObject(char* request_buffer, size_t req_len, Request *req)
 
     if (req->body != NULL && req->body_len > 0 &&
         req->content_type != NULL && strcasecmp(req->content_type, "application/x-www-form-urlencoded") == 0) {
-        ParseFormData(req); // 调用 ParseFormData 来解析并解码表单数据
+        ParseFormData(req); 
     }
 
     free(request_copy);
@@ -761,7 +752,7 @@ void free_request_members(Request *req) {
     if (req->query) {
         for (int i = 0; i < req->query_count; ++i) {
             free(req->query[i].key);
-            free(req->query[i].value); // 解码后的值也需要释放
+            free(req->query[i].value); 
         }
         free(req->query);
     }
@@ -787,7 +778,7 @@ void free_request_members(Request *req) {
     if (req->form) {
         for (int i = 0; i < req->form_length; ++i) {
             free(req->form[i].key);
-            free(req->form[i].value); // 解码后的值也需要释放
+            free(req->form[i].value); 
         }
         free(req->form);
     }
@@ -827,7 +818,7 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
 		return;
 	}
 
-    // DEBUG PRINT: 打印 HandleRequest 接收到的原始请求缓冲区
+    
     fprintf(stderr, "DEBUG: HandleRequest received - Total Length: %zu\n", req_len);
     fprintf(stderr, "DEBUG: HandleRequest received - Raw Request Buffer (Hex):\n");
     for (size_t k = 0; k < req_len; ++k) {
@@ -911,9 +902,9 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
                 case HANDLER_PREFIX:
                 {
                     size_t prefix_len = strlen(handlers[i].metadata.path);
-                    // 检查请求パスがプレフィックスパスで始まるか確認
+                    
                     if (strncmp(req->path, handlers[i].metadata.path, prefix_len) == 0) {
-                        // ルートパス "/" をプレフィックスとして特別に処理
+                        
                         if (strcmp(handlers[i].metadata.path, "/") == 0) {
                             current_handler_meta = &handlers[i].metadata;
                             current_handler = handlers[i].handler;
@@ -921,8 +912,8 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
 							//printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
 							break;
                         } else {
-                            // ルート以外のプレフィックスの場合、プレフィックスの後に文字列終端またはスラッシュが続くことを確認
-                            // これにより "/test" が "/testing" にマッチするのを防ぐ
+                            
+                            
                             if (req->path[prefix_len] == '\0' || req->path[prefix_len] == '/') {
                                 current_handler_meta = &handlers[i].metadata;
                                 current_handler = handlers[i].handler;

@@ -20,7 +20,7 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
-#include "client.h" // 确保这里包含您最新的 client.h
+#include "client.h" 
 
 // Global storage for all parsed SiteConfig structures
 // These are allocated once and pointed to by ListenSocket structures
@@ -696,7 +696,7 @@ int main(int argc, char *argv[]) {
             // int v6only = 1;
             // if (setsockopt(sock_fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only)) < 0) {
             //     perror("setsockopt IPV6_V6ONLY failed"); close(sock_fd); current_ls->sock_fd = -1; continue;
-            // }
+            
 
             struct sockaddr_in6 server_addr_in6;
             memset(&server_addr_in6, 0, sizeof(server_addr_in6));
