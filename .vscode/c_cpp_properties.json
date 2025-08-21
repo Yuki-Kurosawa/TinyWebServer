@@ -7,7 +7,8 @@
                 "/home/yuki/www/include/**",
                 "/usr/include/c++/13",
                 "/usr/include/x86_64-linux-gnu/c++/13",
-                "/usr/include/linux"
+                "/usr/include/linux",
+                "/usr/include"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/gcc",

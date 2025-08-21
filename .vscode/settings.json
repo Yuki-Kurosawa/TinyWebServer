@@ -10,6 +10,8 @@
 		"stdlib.h": "c",
 		"typeinfo": "c",
 		"stdio.h": "c",
-		"demo.h": "c"
+		"demo.h": "c",
+		"errno.h": "c",
+		"cerrno": "c"
 	}
 }
