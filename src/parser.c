@@ -573,8 +573,8 @@ int PacketToRequestObject(char* request_buffer, size_t req_len, Request *req)
                 if (req->body) {
                     memcpy(req->body, body_start_in_original_buffer, req->content_length); // Read from original buffer
                     req->body[req->content_length] = '\0';
-
                     
+                    /*
                     fprintf(stderr, "DEBUG: Raw Request Body (Hex) - Length: %zu, Content: '", req->body_len);
                     for (size_t k = 0; k < req->body_len; ++k) {
                         fprintf(stderr, "%%%02X", (unsigned char)req->body[k]);
@@ -582,6 +582,7 @@ int PacketToRequestObject(char* request_buffer, size_t req_len, Request *req)
                     fprintf(stderr, "'\n");
                     
                     fprintf(stderr, "DEBUG: Raw Request Body (String) - Length: %zu, Content: '%s'\n", req->body_len, req->body);
+                    */
 
                 } else {
                     perror("malloc failed for req->body");
@@ -820,12 +821,14 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
 
     
     fprintf(stderr, "DEBUG: HandleRequest received - Total Length: %zu\n", req_len);
+    /*
     fprintf(stderr, "DEBUG: HandleRequest received - Raw Request Buffer (Hex):\n");
     for (size_t k = 0; k < req_len; ++k) {
         fprintf(stderr, "%%%02X", (unsigned char)request[k]);
         if ((k + 1) % 16 == 0) fprintf(stderr, "\n"); // Newline every 16 bytes for readability
     }
     fprintf(stderr, "\n");
+    */
 
 
 	Request *req = (Request*)malloc(sizeof(Request));

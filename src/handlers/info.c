@@ -198,6 +198,18 @@ void InfoProcessRequest(Request *req, Response *res)
 			req->server_info->remote_port);
 		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<p><strong>Site Root:</strong> %s</p>\n",
 			req->server_info->root_dir ? req->server_info->root_dir : "N/A");
+		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<p><strong>Default Pages:</strong></p>\n");
+		for (int i = 0; i < req->server_info->num_default_page; i++) {
+			body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "%s%s",
+				req->server_info->default_page[i],
+				(i < req->server_info->num_default_page - 1) ? ", " : "");
+		}
+		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<p><strong>Server Names:</strong></p>\n");
+		for (int i = 0; i < req->server_info->num_server_names; i++) {
+			body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "%s%s",
+				req->server_info->server_name[i],
+				(i < req->server_info->num_server_names - 1) ? ", " : "");
+		}
 		// If you need more details from ListenSocket (like site_count, individual site details),
 		// you would need to pass a pointer to ListenSocket directly or through a more complex ServerInfo.
 		// For this version, we're only reflecting what's in ServerInfo struct.

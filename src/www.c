@@ -239,6 +239,50 @@ SiteConfig *parse_site_file(const char *filepath, GlobalConfig *global_config) {
             } else {
                 fprintf(stderr, "Warning: Too many listen directives for site %s, max %d. Ignoring: %s\n", filepath, MAX_SITE_LISTENERS, trimmed_line);
             }
+        } else if (strcmp(key, "default_page") == 0) {
+            // Free previous default_page if re-defined
+            if (site->default_page != NULL) {
+                for (int i = 0; i < site->num_default_page; ++i) {
+                    free(site->default_page[i]);
+                }
+                free(site->default_page);
+                site->default_page = NULL;
+                site->num_default_page = 0;
+            }
+
+            // Count tokens first to allocate array size
+            char *temp_value_copy = strdup(value);
+            if (temp_value_copy == NULL) { perror("strdup failed for default_page count copy"); free(line_copy); free_site_config(site); fclose(file); return NULL; }
+            int count = 0;
+            char *token = strtok(temp_value_copy, " \t");
+            while (token != NULL) {
+                count++;
+                token = strtok(NULL, " \t");
+            }
+            free(temp_value_copy);
+
+            site->default_page = (char**)malloc(count * sizeof(char*));
+            if (site->default_page == NULL) { perror("malloc failed for default_page pointers"); free(line_copy); free_site_config(site); fclose(file); return NULL; }
+            site->num_default_page = 0;
+
+            char *token_value_copy = strdup(value); // Another copy for actual tokenizing
+            if (token_value_copy == NULL) { perror("strdup failed for default_page parse copy"); free(line_copy); free_site_config(site); fclose(file); return NULL; }
+
+            token = strtok(token_value_copy, " \t");
+            while (token != NULL && site->num_default_page < count) {
+                site->default_page[site->num_default_page] = strdup(token);
+                if (site->default_page[site->num_default_page] == NULL) {
+                    perror("strdup failed for individual default_page token");
+                    // Clean up partially allocated default_page array
+                    for(int i = 0; i < site->num_default_page; ++i) free(site->default_page[i]);
+                    free(site->default_page);
+                    site->default_page = NULL;
+                    free(token_value_copy); free(line_copy); free_site_config(site); fclose(file); return NULL;
+                }
+                site->num_default_page++;
+                token = strtok(NULL, " \t");
+            }
+            free(token_value_copy);
         } else if (strcmp(key, "server_name") == 0) {
             // Free previous server_name if re-defined
             if (site->server_name != NULL) {

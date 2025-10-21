@@ -53,6 +53,8 @@ typedef struct {
     char** server_name;         // Array of server names (FQDNs), _ for any FQDN
     int num_server_names;       // Number of server names in the array
     char root_dir[PATH_MAX_LEN]; // Root directory for this site
+    char** default_page;        // Array of default page filenames
+    int num_default_page;      // Number of default pages in the array
 
     // Site-specific SSL configuration (for SNI)
     SSL_CTX *ssl_ctx;                   // SSL context for this site (created from its certs)

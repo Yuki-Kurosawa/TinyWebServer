@@ -54,6 +54,10 @@ typedef struct {
 	char *remote_ip;
 	int remote_port;
 	char *root_dir; 
+	char **default_page; 
+	int num_default_page;
+	char **server_name; 
+	int num_server_names;
 } ServerInfo;
 
 // Structure to represent a parsed HTTP request

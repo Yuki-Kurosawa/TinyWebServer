@@ -344,6 +344,10 @@ void *handle_client(void *thread_args_ptr) {
     }
     
     server_info->root_dir = active_site->root_dir; // This is a pointer, not a copy. Ownership remains with SiteConfig.
+    server_info->default_page = active_site->default_page; 
+    server_info->num_default_page = active_site->num_default_page;
+    server_info->server_name = active_site->server_name;
+    server_info->num_server_names = active_site->num_server_names;
     // --- END NEW ---
 
 
