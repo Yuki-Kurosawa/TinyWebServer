@@ -11,6 +11,9 @@
 
 #define PATH_MAX_LEN 4096 
 
+bool StaticFileCheckPage(HandlerMetadata meta, char *path) {
+    return true;
+}
 
 void StaticFileProcessRequest(Request *req, Response *res) {
     fprintf(stderr, "StaticFileProcessRequest: Handling request for path '%s' with root_dir '%s'\n", 

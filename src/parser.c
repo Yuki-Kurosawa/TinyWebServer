@@ -71,35 +71,41 @@ char* URLDecode(const char* encoded_str) {
 
 /* begin handler registrations */
 
+bool AlwaysTrueFunction(HandlerMetadata meta, char *path) {
+    return true;
+}
+
+
+
 // Handlers are ordered by specificity. More specific handlers should come first.
 // StaticFileHandler with "/" prefix should always be the last as a catch-all.
 Handler handlers[] = {
-    { {"ServerInfoHandler",".info", HANDLER_SUFFIX}, InfoProcessRequest },
+    { {"ServerInfoHandler",".info", HANDLER_SUFFIX}, InfoProcessRequest, AlwaysTrueFunction },
 
     /* Begin tons of dynamic handlers */
     
     
-    { {"DynamicAPIHandler", ".do", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
-    { {"DynamicAPIHandler", ".aspx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
-    { {"DynamicAPIHandler", ".ashx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
-    { {"DynamicAPIHandler", ".asmx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
-    { {"DynamicAPIHandler", ".php", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
-    { {"DynamicAPIHandler", ".asp", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
-    { {"DynamicAPIHandler", ".jsp", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
-    { {"DynamicAPIHandler", ".jspx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
-    { {"DynamicAPIHandler", ".action", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
-    { {"DynamicAPIHandler", ".py", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
-    { {"DynamicAPIHandler", ".rb", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
-    { {"DynamicAPIHandler", ".pl", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
-    { {"DynamicAPIHandler", ".cgi", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
-    { {"DynamicAPIHandler", ".fcgi", HANDLER_SUFFIX }, DynamicHandlerProcessRequest },
+    { {"DynamicAPIHandler", ".do", HANDLER_SUFFIX }, DynamicHandlerProcessRequest, DynamicHandlerCheckPage },
+    { {"DynamicAPIHandler", ".aspx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest, DynamicHandlerCheckPage },
+    { {"DynamicAPIHandler", ".ashx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest, DynamicHandlerCheckPage },
+    { {"DynamicAPIHandler", ".asmx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest, DynamicHandlerCheckPage },
+    { {"DynamicAPIHandler", ".php", HANDLER_SUFFIX }, DynamicHandlerProcessRequest, DynamicHandlerCheckPage },
+    { {"DynamicAPIHandler", ".asp", HANDLER_SUFFIX }, DynamicHandlerProcessRequest, DynamicHandlerCheckPage},
+    { {"DynamicAPIHandler", ".jsp", HANDLER_SUFFIX }, DynamicHandlerProcessRequest, DynamicHandlerCheckPage },
+    { {"DynamicAPIHandler", ".jspx", HANDLER_SUFFIX }, DynamicHandlerProcessRequest, DynamicHandlerCheckPage },
+    { {"DynamicAPIHandler", ".action", HANDLER_SUFFIX }, DynamicHandlerProcessRequest, DynamicHandlerCheckPage },
+    { {"DynamicAPIHandler", ".py", HANDLER_SUFFIX }, DynamicHandlerProcessRequest, DynamicHandlerCheckPage },
+    { {"DynamicAPIHandler", ".rb", HANDLER_SUFFIX }, DynamicHandlerProcessRequest, DynamicHandlerCheckPage },
+    { {"DynamicAPIHandler", ".pl", HANDLER_SUFFIX }, DynamicHandlerProcessRequest, DynamicHandlerCheckPage },
+    { {"DynamicAPIHandler", ".cgi", HANDLER_SUFFIX }, DynamicHandlerProcessRequest, DynamicHandlerCheckPage },
+    { {"DynamicAPIHandler", ".fcgi", HANDLER_SUFFIX }, DynamicHandlerProcessRequest, DynamicHandlerCheckPage },
     /* End tons of dynamic handlers */
 
     // StaticFileHandler はプレフィックスマッチングで、パスは "/" なので、
     
     
-    { {"StaticFileHandler","/", HANDLER_PREFIX}, StaticFileProcessRequest },
-    { NULL, NULL } // End marker for the handlers array
+    { {"StaticFileHandler","/", HANDLER_PREFIX}, StaticFileProcessRequest, StaticFileCheckPage },
+    { NULL, NULL , 0 } // End marker for the handlers array
 };
 
 /* end handler registrations */

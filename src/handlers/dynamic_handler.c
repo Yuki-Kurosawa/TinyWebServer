@@ -14,6 +14,10 @@
 
 #define PATH_MAX_LEN 4096 
 
+bool DynamicHandlerCheckPage(HandlerMetadata meta, char *path) {
+    return true;
+}
+
 
 void DynamicHandlerProcessRequest(Request *req, Response *res) {
     

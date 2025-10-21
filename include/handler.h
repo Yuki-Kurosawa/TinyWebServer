@@ -156,10 +156,14 @@ typedef struct {
 // It will take a Request object and fill in a Response object.
 typedef void (*RequestHandler)(Request *req, Response *res);
 
+// Check Page Usage Delegate
+typedef bool (*CheckPageFunction)(HandlerMetadata meta, char *path);
+
 // HttpRequestHandler
 typedef struct {
 	HandlerMetadata metadata;   // handler metadata
 	RequestHandler handler; // Pointer to the handler function
+	CheckPageFunction check_page; // Pointer to the function to check if the page exists
 } Handler;
 
 #endif // HANDLER_H

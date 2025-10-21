@@ -12,6 +12,9 @@
 		"stdio.h": "c",
 		"demo.h": "c",
 		"errno.h": "c",
-		"cerrno": "c"
+		"cerrno": "c",
+		"dlfcn.h": "c",
+		"common.h": "c",
+		"stat.h": "c"
 	}
 }

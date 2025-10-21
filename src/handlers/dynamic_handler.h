@@ -4,7 +4,7 @@
 
 #include "../../include/handler.h"
 
-
+bool DynamicHandlerCheckPage(HandlerMetadata meta, char *path);
 void DynamicHandlerProcessRequest(Request *req, Response *res);
 
 #endif // DYNAMIC_HANDLER_H
