@@ -3,7 +3,7 @@
 
 #include "../../include/handler.h"
 
-bool StaticFileCheckPage(HandlerMetadata meta, char *path);
+bool StaticFileCheckPage(Request *req, char *path);
 void StaticFileProcessRequest(Request *req, Response *res);
 
 #endif

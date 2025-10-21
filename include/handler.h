@@ -157,7 +157,7 @@ typedef struct {
 typedef void (*RequestHandler)(Request *req, Response *res);
 
 // Check Page Usage Delegate
-typedef bool (*CheckPageFunction)(HandlerMetadata meta, char *path);
+typedef bool (*CheckPageFunction)(Request *req, char *path);
 
 // HttpRequestHandler
 typedef struct {

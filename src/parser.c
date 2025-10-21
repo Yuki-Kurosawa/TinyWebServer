@@ -71,7 +71,7 @@ char* URLDecode(const char* encoded_str) {
 
 /* begin handler registrations */
 
-bool AlwaysTrueFunction(HandlerMetadata meta, char *path) {
+bool AlwaysTrueFunction(Request *req, char *path) {
     return true;
 }
 

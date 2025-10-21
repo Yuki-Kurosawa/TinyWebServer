@@ -11,7 +11,7 @@
 
 #define PATH_MAX_LEN 4096 
 
-bool StaticFileCheckPage(HandlerMetadata meta, char *path) {
+bool StaticFileCheckPage(Request *req, char *path) {
     return true;
 }
 
