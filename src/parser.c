@@ -75,8 +75,6 @@ bool AlwaysTrueFunction(HandlerMetadata meta, char *path) {
     return true;
 }
 
-
-
 // Handlers are ordered by specificity. More specific handlers should come first.
 // StaticFileHandler with "/" prefix should always be the last as a catch-all.
 Handler handlers[] = {
