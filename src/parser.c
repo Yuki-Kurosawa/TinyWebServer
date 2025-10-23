@@ -921,7 +921,7 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
                             if (req->path[prefix_len] == '\0' || req->path[prefix_len] == '/') {
                                 current_handler_meta = &handlers[i].metadata;
                                 current_handler = handlers[i].handler;
-                                match_found = true;
+                                pre_match = true;
 								//printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
 								break;
                             }
@@ -989,6 +989,11 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
                     break;
                 }
             }
+
+            if(pre_match)
+            {
+                break;
+            }       
         }
         if(pre_match)
         {
