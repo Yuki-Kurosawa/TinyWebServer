@@ -14,7 +14,7 @@ void InfoProcessRequest(Request *req, Response *res)
 		return;
 	}
 
-	printf("Processing request in DemoProcessRequest...\n");
+	printf("Processing request in InfoProcessRequest...\n");
 
 	char *html_body=(char*)malloc(CACHE_SIZE);
 	int body_len = 0;
