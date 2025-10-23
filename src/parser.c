@@ -885,9 +885,116 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
 
 	if(ERR_PARSE==0 && req->path != NULL)
 	{
-        bool match_found = false;
+        bool match_found = false, pre_match=false;
         HandlerMetadata *current_handler_meta = NULL;
         RequestHandler current_handler = NULL;
+
+        printf("DEBUG: Begin Pre-Handler Check for path %s\n", req->path);
+        for (int i = 0; handlers[i].metadata.path != NULL; i++)
+        {
+            switch(handlers[i].metadata.type)
+            {
+                case HANDLER_STATIC:
+                {
+                    if (strcmp(handlers[i].metadata.path, req->path) == 0)
+                    {
+                        current_handler_meta = &handlers[i].metadata;
+                        current_handler = handlers[i].handler;
+                        pre_match = true;
+						//printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
+                        break;
+                    }
+                    break;
+                }
+                case HANDLER_PREFIX:
+                {
+                    size_t prefix_len = strlen(handlers[i].metadata.path);
+                    
+                    if (strncmp(req->path, handlers[i].metadata.path, prefix_len) == 0) {                        
+                        if (strcmp(handlers[i].metadata.path, "/") == 0) {
+                            current_handler_meta = &handlers[i].metadata;
+                            current_handler = handlers[i].handler;
+                            pre_match = true;
+							//printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
+							break;
+                        } else {       
+                            if (req->path[prefix_len] == '\0' || req->path[prefix_len] == '/') {
+                                current_handler_meta = &handlers[i].metadata;
+                                current_handler = handlers[i].handler;
+                                match_found = true;
+								//printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
+								break;
+                            }
+                        }
+                    }
+                    break;
+                }
+                case HANDLER_SUFFIX:
+                {
+                    size_t path_len = strlen(req->path);
+                    size_t suffix_len = strlen(handlers[i].metadata.path);
+                    if (path_len >= suffix_len &&
+                        strcmp(req->path + (path_len - suffix_len), handlers[i].metadata.path) == 0)
+                        {
+                            current_handler_meta = &handlers[i].metadata;
+                            current_handler = handlers[i].handler;
+                            pre_match = true;
+							//printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
+							break;
+                        }
+
+                    break;
+                }
+                case HANDLER_REGEX:
+                {
+                    pcre2_code *re;
+                    PCRE2_SPTR pattern = (PCRE2_SPTR)handlers[i].metadata.path;
+                    PCRE2_SPTR subject = (PCRE2_SPTR)req->path;
+                    int errorcode;
+                    PCRE2_SIZE erroroffset;
+                    pcre2_match_data *match_data;
+                    int rc;
+
+                    re = pcre2_compile(pattern, PCRE2_ZERO_TERMINATED, 0, &errorcode, &erroroffset, NULL);
+                    if (re == NULL) {
+                        PCRE2_UCHAR buffer[256];
+                        pcre2_get_error_message(rc, buffer, sizeof(buffer));
+                        fprintf(stderr, "PCRE2 compilation failed at offset %lu: %s\n", erroroffset, buffer);
+                        break;
+                    }
+
+                    match_data = pcre2_match_data_create_from_pattern(re, NULL);
+                    if (match_data == NULL) {
+                        perror("PCRE2 match data creation failed");
+                        pcre2_code_free(re);
+                        break;
+                    }
+
+                    rc = pcre2_match(re, subject, strlen((char *)subject), 0, 0, match_data, NULL);
+
+                    if (rc >= 0) {
+                        pre_match = true;
+                        current_handler_meta = &handlers[i].metadata;
+                        current_handler = handlers[i].handler;
+                    } else if (rc == PCRE2_ERROR_NOMATCH) {
+                    } else {
+                        PCRE2_UCHAR buffer[256];
+                        pcre2_get_error_message(rc, buffer, sizeof(buffer));
+                        fprintf(stderr, "PCRE2 matching error: %s\n", buffer);
+                    }
+
+                    pcre2_match_data_free(match_data);
+                    pcre2_code_free(re);
+					//printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
+                    break;
+                }
+            }
+        }
+        if(pre_match)
+        {
+            printf("Pre-Handler found for path %s with \"%s\"\n", req->path, current_handler_meta->name);
+        }
+        printf("DEBUG: End Pre-Handler Check\n");
 
 		for (int i = 0; handlers[i].metadata.path != NULL; i++)
         {
@@ -910,17 +1017,14 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
                 {
                     size_t prefix_len = strlen(handlers[i].metadata.path);
                     
-                    if (strncmp(req->path, handlers[i].metadata.path, prefix_len) == 0) {
-                        
+                    if (strncmp(req->path, handlers[i].metadata.path, prefix_len) == 0) {                        
                         if (strcmp(handlers[i].metadata.path, "/") == 0) {
                             current_handler_meta = &handlers[i].metadata;
                             current_handler = handlers[i].handler;
                             match_found = true;
 							//printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
 							break;
-                        } else {
-                            
-                            
+                        } else {       
                             if (req->path[prefix_len] == '\0' || req->path[prefix_len] == '/') {
                                 current_handler_meta = &handlers[i].metadata;
                                 current_handler = handlers[i].handler;
