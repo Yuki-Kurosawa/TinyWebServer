@@ -15,6 +15,7 @@
 		"cerrno": "c",
 		"dlfcn.h": "c",
 		"common.h": "c",
-		"stat.h": "c"
+		"stat.h": "c",
+		"static_file.h": "c"
 	}
 }

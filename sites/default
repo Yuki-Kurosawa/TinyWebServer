@@ -1,6 +1,6 @@
 listen 0.0.0.0:4880;
 listen [::]:6880;
 
-default_page index.htm index.html index.php;
+default_page .info index.php index.htm index.html;
 
 root /var/www/default/html;

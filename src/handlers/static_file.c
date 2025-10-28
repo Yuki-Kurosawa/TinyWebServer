@@ -9,9 +9,26 @@
 #include <magic.h>    
 #include "../common.h" 
 
-#define PATH_MAX_LEN 4096 
+
 
 bool StaticFileCheckPage(Request *req, char *path) {
+    char file_to_serve[PATH_MAX_LEN];
+    
+    
+    int path_snprintf_result = snprintf(file_to_serve, sizeof(file_to_serve), "%s%s%s",
+                                        req->server_info->root_dir, req->path,path);
+    printf("StaticFileCheckPage: Checking existence of file '%s'\n", file_to_serve);
+
+    struct stat path_stat;
+    
+    if (stat(file_to_serve, &path_stat) == 0) {
+        
+        if (S_ISDIR(path_stat.st_mode)) {
+            printf("DEBUG: StaticFileCheckPage: '%s' is a directory\n", req->path);
+            return false; 
+        }
+    }
+
     return true;
 }
 

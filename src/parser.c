@@ -75,10 +75,14 @@ bool AlwaysTrueFunction(Request *req, char *path) {
     return true;
 }
 
+bool InfoCheckPage(Request *req, char *path) {
+    return true;
+}
+
 // Handlers are ordered by specificity. More specific handlers should come first.
 // StaticFileHandler with "/" prefix should always be the last as a catch-all.
 Handler handlers[] = {
-    { {"ServerInfoHandler",".info", HANDLER_SUFFIX}, InfoProcessRequest, AlwaysTrueFunction },
+    { {"ServerInfoHandler",".info", HANDLER_SUFFIX}, InfoProcessRequest, InfoCheckPage },
 
     /* Begin tons of dynamic handlers */
     
@@ -888,112 +892,175 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
         bool match_found = false, pre_match=false;
         HandlerMetadata *current_handler_meta = NULL;
         RequestHandler current_handler = NULL;
+        Handler pre_match_handler;
 
         printf("DEBUG: Begin Pre-Handler Check for path %s\n", req->path);
-        for (int i = 0; handlers[i].metadata.path != NULL; i++)
+        for(int j=-1;j<req->server_info->num_default_page;j++)
         {
-            switch(handlers[i].metadata.type)
+            char *new_path=(char*)malloc(PATH_MAX_LEN);
+            if(j==-1)
             {
-                case HANDLER_STATIC:
+                printf("DEBUG: Begin Trying %s\n", req->path);
+                free(new_path);
+                new_path=req->path;
+            }
+            else
+            {
+                printf("DEBUG: Begin Trying %s%s\n", req->path,req->server_info->default_page[j]);                
+                size_t old_len = strlen(req->path);
+                if(req->path[old_len-1]=='/')
                 {
-                    if (strcmp(handlers[i].metadata.path, req->path) == 0)
+                    int new_path_len = snprintf(new_path, PATH_MAX_LEN, "%s%s", req->path, req->server_info->default_page[j]);
+                }
+                else
+                {
+                    int new_path_len = snprintf(new_path, PATH_MAX_LEN, "%s/%s", req->path, req->server_info->default_page[j]);
+                }
+            }
+        
+            for (int i = 0; handlers[i].metadata.path != NULL; i++)
+            {
+                printf("DEBUG: Trying %s with \"%s\"\n", new_path, handlers[i].metadata.name);
+                switch(handlers[i].metadata.type)
+                {
+                    case HANDLER_STATIC:
                     {
-                        current_handler_meta = &handlers[i].metadata;
-                        current_handler = handlers[i].handler;
-                        pre_match = true;
-						//printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
-                        break;
-                    }
-                    break;
-                }
-                case HANDLER_PREFIX:
-                {
-                    size_t prefix_len = strlen(handlers[i].metadata.path);
-                    
-                    if (strncmp(req->path, handlers[i].metadata.path, prefix_len) == 0) {                        
-                        if (strcmp(handlers[i].metadata.path, "/") == 0) {
-                            current_handler_meta = &handlers[i].metadata;
-                            current_handler = handlers[i].handler;
-                            pre_match = true;
-							//printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
-							break;
-                        } else {       
-                            if (req->path[prefix_len] == '\0' || req->path[prefix_len] == '/') {
-                                current_handler_meta = &handlers[i].metadata;
-                                current_handler = handlers[i].handler;
-                                pre_match = true;
-								//printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
-								break;
-                            }
-                        }
-                    }
-                    break;
-                }
-                case HANDLER_SUFFIX:
-                {
-                    size_t path_len = strlen(req->path);
-                    size_t suffix_len = strlen(handlers[i].metadata.path);
-                    if (path_len >= suffix_len &&
-                        strcmp(req->path + (path_len - suffix_len), handlers[i].metadata.path) == 0)
+                        if (strcmp(handlers[i].metadata.path, new_path) == 0)
                         {
                             current_handler_meta = &handlers[i].metadata;
                             current_handler = handlers[i].handler;
                             pre_match = true;
-							//printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
-							break;
+                            //printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
+                            break;
+                        }
+                        break;
+                    }
+                    case HANDLER_PREFIX:
+                    {
+                        size_t prefix_len = strlen(handlers[i].metadata.path);
+                        
+                        if (strncmp(new_path, handlers[i].metadata.path, prefix_len) == 0) {                        
+                            if (strcmp(handlers[i].metadata.path, "/") == 0) {
+                                current_handler_meta = &handlers[i].metadata;
+                                current_handler = handlers[i].handler;
+                                pre_match = true;
+                                //printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
+                                break;
+                            } else {       
+                                if (new_path[prefix_len] == '\0' || new_path[prefix_len] == '/') {
+                                    current_handler_meta = &handlers[i].metadata;
+                                    current_handler = handlers[i].handler;
+                                    pre_match = true;
+                                    //printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
+                                    break;
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    case HANDLER_SUFFIX:
+                    {
+                        size_t path_len = strlen(new_path);
+                        size_t suffix_len = strlen(handlers[i].metadata.path);
+                        if (path_len >= suffix_len &&
+                            strcmp(new_path + (path_len - suffix_len), handlers[i].metadata.path) == 0)
+                            {
+                                current_handler_meta = &handlers[i].metadata;
+                                current_handler = handlers[i].handler;
+                                pre_match = true;
+                                //printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
+                                break;
+                            }
+
+                        break;
+                    }
+                    case HANDLER_REGEX:
+                    {
+                        pcre2_code *re;
+                        PCRE2_SPTR pattern = (PCRE2_SPTR)handlers[i].metadata.path;
+                        PCRE2_SPTR subject = (PCRE2_SPTR)new_path;
+                        int errorcode;
+                        PCRE2_SIZE erroroffset;
+                        pcre2_match_data *match_data;
+                        int rc;
+
+                        re = pcre2_compile(pattern, PCRE2_ZERO_TERMINATED, 0, &errorcode, &erroroffset, NULL);
+                        if (re == NULL) {
+                            PCRE2_UCHAR buffer[256];
+                            pcre2_get_error_message(rc, buffer, sizeof(buffer));
+                            fprintf(stderr, "PCRE2 compilation failed at offset %lu: %s\n", erroroffset, buffer);
+                            break;
                         }
 
-                    break;
-                }
-                case HANDLER_REGEX:
-                {
-                    pcre2_code *re;
-                    PCRE2_SPTR pattern = (PCRE2_SPTR)handlers[i].metadata.path;
-                    PCRE2_SPTR subject = (PCRE2_SPTR)req->path;
-                    int errorcode;
-                    PCRE2_SIZE erroroffset;
-                    pcre2_match_data *match_data;
-                    int rc;
+                        match_data = pcre2_match_data_create_from_pattern(re, NULL);
+                        if (match_data == NULL) {
+                            perror("PCRE2 match data creation failed");
+                            pcre2_code_free(re);
+                            break;
+                        }
 
-                    re = pcre2_compile(pattern, PCRE2_ZERO_TERMINATED, 0, &errorcode, &erroroffset, NULL);
-                    if (re == NULL) {
-                        PCRE2_UCHAR buffer[256];
-                        pcre2_get_error_message(rc, buffer, sizeof(buffer));
-                        fprintf(stderr, "PCRE2 compilation failed at offset %lu: %s\n", erroroffset, buffer);
-                        break;
-                    }
+                        rc = pcre2_match(re, subject, strlen((char *)subject), 0, 0, match_data, NULL);
 
-                    match_data = pcre2_match_data_create_from_pattern(re, NULL);
-                    if (match_data == NULL) {
-                        perror("PCRE2 match data creation failed");
+                        if (rc >= 0) {
+                            pre_match = true;
+                            current_handler_meta = &handlers[i].metadata;
+                            current_handler = handlers[i].handler;
+                        } else if (rc == PCRE2_ERROR_NOMATCH) {
+                        } else {
+                            PCRE2_UCHAR buffer[256];
+                            pcre2_get_error_message(rc, buffer, sizeof(buffer));
+                            fprintf(stderr, "PCRE2 matching error: %s\n", buffer);
+                        }
+
+                        pcre2_match_data_free(match_data);
                         pcre2_code_free(re);
+                        //printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
                         break;
                     }
-
-                    rc = pcre2_match(re, subject, strlen((char *)subject), 0, 0, match_data, NULL);
-
-                    if (rc >= 0) {
-                        pre_match = true;
-                        current_handler_meta = &handlers[i].metadata;
-                        current_handler = handlers[i].handler;
-                    } else if (rc == PCRE2_ERROR_NOMATCH) {
-                    } else {
-                        PCRE2_UCHAR buffer[256];
-                        pcre2_get_error_message(rc, buffer, sizeof(buffer));
-                        fprintf(stderr, "PCRE2 matching error: %s\n", buffer);
-                    }
-
-                    pcre2_match_data_free(match_data);
-                    pcre2_code_free(re);
-					//printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
-                    break;
                 }
-            }
 
+                if(pre_match)
+                {
+                    pre_match_handler=handlers[i];
+                    break;
+                }       
+            }
             if(pre_match)
             {
+                if(j==-1)
+                {
+                    pre_match=pre_match_handler.check_page(req,"");
+                }
+                else
+                {
+                    pre_match=pre_match_handler.check_page(req,req->server_info->default_page[j]);
+                }
+                printf("DEBUG: Pre-Handler check_page returned %s\n", pre_match ? "true" : "false");
+            }
+            if(pre_match)
+            {
+                 if(j==-1)
+                {
+                    printf("DEBUG: End Trying Successfully %s\n", req->path);
+                }
+                else
+                {
+                    printf("DEBUG: End Trying Successfully %s%s\n", req->path,req->server_info->default_page[j]);                    
+                    req->path=new_path;
+                }
                 break;
-            }       
+            }
+            else
+            {
+                if(j==-1)
+                {
+                    printf("DEBUG: End Trying failed %s\n", req->path);
+                }
+                else
+                {
+                    printf("DEBUG: End Trying failed %s%s\n", req->path,req->server_info->default_page[j]);
+                }
+            }
         }
         if(pre_match)
         {
