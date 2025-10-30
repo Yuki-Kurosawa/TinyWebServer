@@ -15,6 +15,60 @@
 #define PATH_MAX_LEN 4096 
 
 bool DynamicHandlerCheckPage(Request *req, char *path) {
+    char file_to_serve1[PATH_MAX_LEN];    
+    
+    int path_snprintf_result = snprintf(file_to_serve1, sizeof(file_to_serve1), "%s%s%s",
+                                        req->server_info->root_dir, req->path,path);
+
+    printf("DynamicHandlerCheckPage: Script Path: %s \n",file_to_serve1);
+
+    char file_to_serve[PATH_MAX_LEN];
+    char dynamic_path_base[PATH_MAX_LEN]; 
+
+    const char *original_path = file_to_serve1;
+    char *last_slash = strrchr(original_path, '/');
+    const char *filename_start;
+    char directory_path[PATH_MAX_LEN];
+    memset(directory_path, 0, sizeof(directory_path));
+
+    size_t dir_len = last_slash - original_path + 1;
+    strncpy(directory_path, original_path, dir_len);
+    directory_path[dir_len] = '\0';
+    filename_start = last_slash + 1;
+
+    char base_filename[PATH_MAX_LEN]; 
+    char *dot_in_filename = strrchr(filename_start, '.');
+    size_t base_filename_len = dot_in_filename - filename_start;
+
+    if (dot_in_filename != NULL) {
+        
+        strncpy(base_filename, filename_start, base_filename_len);
+        base_filename[base_filename_len] = '\0';
+    } else {
+        
+        strcpy(base_filename, filename_start);
+    }
+    
+    int snprintf_result = snprintf(dynamic_path_base, sizeof(dynamic_path_base), "%s%s%s.so",
+                                   directory_path, "lib", base_filename);
+
+    struct stat file_stat;
+
+    printf("DynamicHandlerCheckPage: Library Path: %s \n",dynamic_path_base);
+    
+    if (stat(file_to_serve, &file_stat) != 0 || !S_ISREG(file_stat.st_mode)) {
+        return false;
+    }    
+
+    void *handle=dlopen(file_to_serve, RTLD_LAZY);
+    if(!handle){
+        printf("DynamicHandlerCheckPage: Library Load Failed: %s \n",dynamic_path_base);
+        return false;
+    }   
+
+    close(handle);
+
+    
     return true;
 }
 

@@ -12,8 +12,7 @@
 
 
 bool StaticFileCheckPage(Request *req, char *path) {
-    char file_to_serve[PATH_MAX_LEN];
-    
+    char file_to_serve[PATH_MAX_LEN];    
     
     int path_snprintf_result = snprintf(file_to_serve, sizeof(file_to_serve), "%s%s%s",
                                         req->server_info->root_dir, req->path,path);
@@ -29,6 +28,11 @@ bool StaticFileCheckPage(Request *req, char *path) {
         }
     }
 
+    FILE* fp=fopen(file_to_serve,"r");
+    if(fp==NULL){
+        printf("StaticFileCheckPage: Failed to open file '%s'\n", file_to_serve);
+        return false;
+    }
     return true;
 }
 
