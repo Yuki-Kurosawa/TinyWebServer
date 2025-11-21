@@ -1,3 +1,5 @@
+// Copyright (c) 2025 Yuki Kurosawa
+// SPDX-License-Identifier: MIT
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +17,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <ctype.h> // For isdigit
+#include <getopt.h>
 
 // Include OpenSSL headers
 #include <openssl/ssl.h>
@@ -636,8 +639,38 @@ void parse_global_config(const char *filepath, GlobalConfig *config) {
 }
 
 
+static struct option options[] = {    
+    {"help",    no_argument, 0, 'h'}, 
+    {"version", no_argument, 0, 'v'}, 
+    {0, 0, 0, 0} 
+};
+
+
 // --- Main Function ---
 int main(int argc, char *argv[]) {
+
+    if(argc > 1)
+    {
+        int opt;
+        int option_index = 0;
+        while ((opt = getopt_long(argc, argv, "hvp:", options, &option_index)) != -1) {
+        switch (opt) {
+            case 'h':
+                show_help(argv[0]);
+                return 0; 
+            case 'v':
+                show_version(argv[0]);
+                return 0; 
+            case '?':
+                fprintf(stderr, "Unknown options. Use -h or --help for help.\n");
+                return 1;
+            default:
+                break;
+        }
+    }
+        return 0;
+    }
+
     // Initialize OpenSSL library (should be done once at application startup)
     SSL_library_init();
     SSL_load_error_strings();

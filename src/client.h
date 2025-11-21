@@ -1,3 +1,5 @@
+// Copyright (c) 2025 Yuki Kurosawa
+// SPDX-License-Identifier: MIT
 // client.h
 #ifndef CLIENT_H
 #define CLIENT_H

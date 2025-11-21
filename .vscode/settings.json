@@ -16,6 +16,7 @@
 		"dlfcn.h": "c",
 		"common.h": "c",
 		"stat.h": "c",
-		"static_file.h": "c"
+		"static_file.h": "c",
+		"in.h": "c"
 	}
 }

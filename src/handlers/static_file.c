@@ -1,3 +1,5 @@
+// Copyright (c) 2025 Yuki Kurosawa
+// SPDX-License-Identifier: MIT
 // handlers/static_file.c
 #include "static_file.h"
 #include <stdio.h>

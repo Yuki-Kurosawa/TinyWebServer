@@ -1,3 +1,5 @@
+// Copyright (c) 2025 Yuki Kurosawa
+// SPDX-License-Identifier: MIT
 // handlers/dynamic_handler.h
 #ifndef DYNAMIC_HANDLER_H
 #define DYNAMIC_HANDLER_H

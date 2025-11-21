@@ -1,3 +1,5 @@
+// Copyright (c) 2025 Yuki Kurosawa
+// SPDX-License-Identifier: MIT
 #include "info.h" // This will include handler.h, which now has ServerInfo
 
 #include <string.h> // For memcpy and strlen

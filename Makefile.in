@@ -105,9 +105,9 @@ CONFIG_CLEAN_VPATH_FILES =
 am__installdirs = "$(DESTDIR)$(bindir)"
 PROGRAMS = $(bin_PROGRAMS)
 am__dirstamp = $(am__leading_dot)dirstamp
-am_yuki_OBJECTS = src/www.$(OBJEXT) src/client.$(OBJEXT) \
-	src/handlers/info.$(OBJEXT) src/parser.$(OBJEXT) \
-	src/handlers/static_file.$(OBJEXT) \
+am_yuki_OBJECTS = src/www.$(OBJEXT) src/common.$(OBJEXT) \
+	src/client.$(OBJEXT) src/handlers/info.$(OBJEXT) \
+	src/parser.$(OBJEXT) src/handlers/static_file.$(OBJEXT) \
 	src/handlers/dynamic_handler.$(OBJEXT)
 yuki_OBJECTS = $(am_yuki_OBJECTS)
 yuki_DEPENDENCIES =
@@ -128,8 +128,9 @@ am__v_at_1 =
 DEFAULT_INCLUDES = -I.@am__isrc@
 depcomp = $(SHELL) $(top_srcdir)/depcomp
 am__maybe_remake_depfiles = depfiles
-am__depfiles_remade = src/$(DEPDIR)/client.Po src/$(DEPDIR)/parser.Po \
-	src/$(DEPDIR)/www.Po src/handlers/$(DEPDIR)/dynamic_handler.Po \
+am__depfiles_remade = src/$(DEPDIR)/client.Po src/$(DEPDIR)/common.Po \
+	src/$(DEPDIR)/parser.Po src/$(DEPDIR)/www.Po \
+	src/handlers/$(DEPDIR)/dynamic_handler.Po \
 	src/handlers/$(DEPDIR)/info.Po \
 	src/handlers/$(DEPDIR)/static_file.Po
 am__mv = mv -f
@@ -220,12 +221,16 @@ INSTALL_PROGRAM = @INSTALL_PROGRAM@
 INSTALL_SCRIPT = @INSTALL_SCRIPT@
 INSTALL_STRIP_PROGRAM = @INSTALL_STRIP_PROGRAM@
 LDFLAGS = @LDFLAGS@
+LIBMAGIC_CFLAGS = @LIBMAGIC_CFLAGS@
+LIBMAGIC_LIBS = @LIBMAGIC_LIBS@
 LIBOBJS = @LIBOBJS@
 LIBS = @LIBS@
 LTLIBOBJS = @LTLIBOBJS@
 MAKEINFO = @MAKEINFO@
 MKDIR_P = @MKDIR_P@
 OBJEXT = @OBJEXT@
+OPENSSL_CFLAGS = @OPENSSL_CFLAGS@
+OPENSSL_LIBS = @OPENSSL_LIBS@
 PACKAGE = @PACKAGE@
 PACKAGE_BUGREPORT = @PACKAGE_BUGREPORT@
 PACKAGE_NAME = @PACKAGE_NAME@
@@ -234,6 +239,11 @@ PACKAGE_TARNAME = @PACKAGE_TARNAME@
 PACKAGE_URL = @PACKAGE_URL@
 PACKAGE_VERSION = @PACKAGE_VERSION@
 PATH_SEPARATOR = @PATH_SEPARATOR@
+PCRE2_CFLAGS = @PCRE2_CFLAGS@
+PCRE2_LIBS = @PCRE2_LIBS@
+PKG_CONFIG = @PKG_CONFIG@
+PKG_CONFIG_LIBDIR = @PKG_CONFIG_LIBDIR@
+PKG_CONFIG_PATH = @PKG_CONFIG_PATH@
 SET_MAKE = @SET_MAKE@
 SHELL = @SHELL@
 STRIP = @STRIP@
@@ -289,7 +299,7 @@ target_alias = @target_alias@
 top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
-yuki_SOURCES = src/www.c src/client.c src/handlers/info.c src/parser.c src/handlers/static_file.c src/handlers/dynamic_handler.c
+yuki_SOURCES = src/www.c src/common.c src/client.c src/handlers/info.c src/parser.c src/handlers/static_file.c src/handlers/dynamic_handler.c
 yuki_LDFLAGS = -pthread 
 yuki_LDADD = -lssl -lcrypto -lpcre2-8 -lmagic
 all: config.h
@@ -394,6 +404,8 @@ src/$(DEPDIR)/$(am__dirstamp):
 	@$(MKDIR_P) src/$(DEPDIR)
 	@: > src/$(DEPDIR)/$(am__dirstamp)
 src/www.$(OBJEXT): src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
+src/common.$(OBJEXT): src/$(am__dirstamp) \
+	src/$(DEPDIR)/$(am__dirstamp)
 src/client.$(OBJEXT): src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
 src/handlers/$(am__dirstamp):
@@ -424,6 +436,7 @@ distclean-compile:
 	-rm -f *.tab.c
 
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/client.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/common.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/parser.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/www.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/handlers/$(DEPDIR)/dynamic_handler.Po@am__quote@ # am--include-marker
@@ -730,6 +743,7 @@ clean-am: clean-binPROGRAMS clean-generic mostlyclean-am
 distclean: distclean-am
 	-rm -f $(am__CONFIG_DISTCLEAN_FILES)
 		-rm -f src/$(DEPDIR)/client.Po
+	-rm -f src/$(DEPDIR)/common.Po
 	-rm -f src/$(DEPDIR)/parser.Po
 	-rm -f src/$(DEPDIR)/www.Po
 	-rm -f src/handlers/$(DEPDIR)/dynamic_handler.Po
@@ -783,6 +797,7 @@ maintainer-clean: maintainer-clean-am
 	-rm -f $(am__CONFIG_DISTCLEAN_FILES)
 	-rm -rf $(top_srcdir)/autom4te.cache
 		-rm -f src/$(DEPDIR)/client.Po
+	-rm -f src/$(DEPDIR)/common.Po
 	-rm -f src/$(DEPDIR)/parser.Po
 	-rm -f src/$(DEPDIR)/www.Po
 	-rm -f src/handlers/$(DEPDIR)/dynamic_handler.Po
