@@ -17,7 +17,7 @@ tests/test.c \
 -I./include
 
 file libtest.so
-sudo cp libtest.so /var/www/default/html/libtest.so
+#sudo cp libtest.so /var/www/default/html/libtest.so
 
 
-./www
+#./www

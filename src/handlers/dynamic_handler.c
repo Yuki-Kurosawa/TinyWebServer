@@ -66,7 +66,7 @@ bool DynamicHandlerCheckPage(Request *req, char *path) {
         return false;
     }   
 
-    close(handle);
+    dlclose(handle);
 
     
     return true;
