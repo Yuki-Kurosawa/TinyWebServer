@@ -110,7 +110,9 @@ am_yuki_OBJECTS = src/www.$(OBJEXT) src/client.$(OBJEXT) \
 	src/handlers/static_file.$(OBJEXT) \
 	src/handlers/dynamic_handler.$(OBJEXT)
 yuki_OBJECTS = $(am_yuki_OBJECTS)
-yuki_LDADD = $(LDADD)
+yuki_DEPENDENCIES =
+yuki_LINK = $(CCLD) $(AM_CFLAGS) $(CFLAGS) $(yuki_LDFLAGS) $(LDFLAGS) \
+	-o $@
 AM_V_P = $(am__v_P_@AM_V@)
 am__v_P_ = $(am__v_P_@AM_DEFAULT_V@)
 am__v_P_0 = false
@@ -288,6 +290,8 @@ top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
 yuki_SOURCES = src/www.c src/client.c src/handlers/info.c src/parser.c src/handlers/static_file.c src/handlers/dynamic_handler.c
+yuki_LDFLAGS = -pthread 
+yuki_LDADD = -lssl -lcrypto -lpcre2-8 -lmagic
 all: config.h
 	$(MAKE) $(AM_MAKEFLAGS) all-am
 
@@ -409,7 +413,7 @@ src/handlers/dynamic_handler.$(OBJEXT): src/handlers/$(am__dirstamp) \
 
 yuki$(EXEEXT): $(yuki_OBJECTS) $(yuki_DEPENDENCIES) $(EXTRA_yuki_DEPENDENCIES) 
 	@rm -f yuki$(EXEEXT)
-	$(AM_V_CCLD)$(LINK) $(yuki_OBJECTS) $(yuki_LDADD) $(LIBS)
+	$(AM_V_CCLD)$(yuki_LINK) $(yuki_OBJECTS) $(yuki_LDADD) $(LIBS)
 
 mostlyclean-compile:
 	-rm -f *.$(OBJEXT)
