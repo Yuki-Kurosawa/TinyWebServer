@@ -1,0 +1,3 @@
+shlibs:Depends=libc6 (>= 2.34), libmagic1t64 (>= 1:5.0), libpcre2-8-0 (>= 10.22), libssl3t64 (>= 3.0.0)
+misc:Depends=
+misc:Pre-Depends=

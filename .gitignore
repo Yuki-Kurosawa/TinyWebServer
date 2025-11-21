@@ -57,3 +57,6 @@ tags
 *.crt
 *.cer
 *.pem
+.deps
+debian/.debhelper
+autom4te.cache
