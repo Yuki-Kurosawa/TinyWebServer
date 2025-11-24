@@ -1,3 +1,5 @@
+// Copyright (c) 2025 Yuki Kurosawa
+// SPDX-License-Identifier: MIT
 #ifndef PARSER_H
 #define PARSER_H
 

@@ -1,3 +1,5 @@
+// Copyright (c) 2025 Yuki Kurosawa
+// SPDX-License-Identifier: MIT
 #include "parser.h"
 #include <string.h> // For memcpy and strlen, strncmp, strcmp, strrchr
 #include <stdio.h>  // For printf (if needed for debugging), fprintf
