@@ -1,3 +1,5 @@
+// Copyright (c) 2025 Yuki Kurosawa
+// SPDX-License-Identifier: MIT
 // handlers/dynamic_handler.c
 #include "dynamic_handler.h"
 #include <string.h> // For strlen, strdup, snprintf, strrchr, strncpy, strcat
