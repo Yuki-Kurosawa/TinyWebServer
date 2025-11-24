@@ -1,0 +1,13 @@
+Package: yuki-dbgsym
+Package-Type: ddeb
+Source: yuki
+Version: 1.0.0-1
+Auto-Built-Package: debug-symbols
+Architecture: amd64
+Maintainer: <>
+Installed-Size: 94
+Depends: yuki (= 1.0.0-1)
+Section: debug
+Priority: optional
+Description: debug symbols for yuki
+Build-Ids: 4f6498c49047cd9a50c01476172f67d6ed4cc851
