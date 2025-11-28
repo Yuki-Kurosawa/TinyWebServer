@@ -32,7 +32,7 @@ Copyright: 1992-2022 Free Software Foundation, Inc.
            2025 Yuki Kurosawa SPDX-License-Identifier: MIT client.h
            2025 Yuki Kurosawa SPDX-License-Identifier: MIT include/handler.h
            2025 Yuki Kurosawa SPDX-License-Identifier: MIT test.c
-License:   __NO_LICENSE__
+License:   MIT
 
 Files:     .deps/yuki.Po
            .gitignore
@@ -51,8 +51,8 @@ Files:     .deps/yuki.Po
            x.crt
            x.pem
            x_chain.crt
-Copyright: __NO_COPYRIGHT_NOR_LICENSE__
-License:   __NO_COPYRIGHT_NOR_LICENSE__
+Copyright: 2025 Yuki Kurosawa
+License:   MIT
 
 Files:     Makefile.in
            aclocal.m4
@@ -75,12 +75,14 @@ License:   PERMISSIVE
  This configure script is free software; the Free Software Foundation
  gives unlimited permission to copy, distribute and modify it.
 
+
 #----------------------------------------------------------------------------
 # Files marked as NO_LICENSE_TEXT_FOUND may be covered by the following
 # license/copyright files.
 
 #----------------------------------------------------------------------------
 # License file: LICENSE
+License: MIT 
  MIT License
  .
  Copyright (c) 2025 Yuki Kurosawa

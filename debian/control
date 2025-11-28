@@ -1,8 +1,8 @@
 Source: yuki
 Section: unknown
 Priority: optional
-Maintainer:  <>
-Build-Depends: debhelper-compat (= 13), dh-autoreconf, pkg-config, libssl-dev (>=3.0.0), libpcre2-dev (>=10.0), libmagic-dev (>=1:5.0)
+Maintainer:  Yuki Kurosawa HotKey <yuki@ksyuki.com>
+Build-Depends: debhelper-compat (= 13), pkgconf, libssl-dev (>=3.0.0), libpcre2-dev (>=10.0), libmagic-dev (>=1:5.0)
 Standards-Version: 4.6.1
 Homepage: <insert the upstream URL, if relevant>
 Rules-Requires-Root: no

@@ -1,6 +1,5 @@
 yuki (1.0.0-1) UNRELEASED; urgency=low
 
-  * Initial release. Closes: #nnnn
-    <nnnn is the bug number of your ITP>
+  * Initial release. 
 
- --  <>  Fri, 21 Nov 2025 15:07:15 +0800
+ --  Yuki Kurosawa HotKey <yuki@ksyuki.com>  Fri, 21 Nov 2025 15:07:15 +0800
