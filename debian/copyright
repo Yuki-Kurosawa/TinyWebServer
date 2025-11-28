@@ -25,6 +25,7 @@ Files:     Makefile.am
            src/www.c
            tests/test.c
            tests/test.h
+           cleanenv.sh
 Copyright: 1992-2022 Free Software Foundation, Inc.
            2025 Yuki Kurosawa SPDX-License-Identifier: MIT
            2025 Yuki Kurosawa SPDX-License-Identifier: MIT !/bin/bash
