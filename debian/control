@@ -4,10 +4,10 @@ Priority: optional
 Maintainer:  Yuki Kurosawa HotKey <yuki@ksyuki.com>
 Build-Depends: debhelper-compat (= 13), pkgconf, libssl-dev (>=3.0.0), libpcre2-dev (>=10.0), libmagic-dev (>=1:5.0)
 Standards-Version: 4.6.1
-Homepage: <insert the upstream URL, if relevant>
+Homepage: https://github.com/Yuki-Kurosawa/TinyWebServer.git
 Rules-Requires-Root: no
-#Vcs-Git: https://salsa.debian.org/debian/yuki.git
-#Vcs-Browser: https://salsa.debian.org/debian/yuki
+Vcs-Git: https://salsa.debian.org/YukiKurosawa/TinyWebServer.git
+Vcs-Browser: https://salsa.debian.org/YukiKurosawa/TinyWebServer
 
 Package: yuki
 Architecture: any

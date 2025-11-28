@@ -1,7 +1,7 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: yuki
-Upstream-Contact: <preferred name and address to reach the upstream project>
-Source: <url://example.com>
+Upstream-Name: tinywebserver
+Upstream-Contact: Yuki Kurosawa <yuki@ksyuki.com>
+Source: https://github.com/Yuki-Kurosawa/TinyWebServer.git
 #
 # Please double check copyright with the licensecheck(1) command.
 
