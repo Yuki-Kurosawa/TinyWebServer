@@ -1,5 +1,5 @@
 Source: yuki
-Section: unknown
+Section: web
 Priority: optional
 Maintainer:  Yuki Kurosawa HotKey <yuki@ksyuki.com>
 Build-Depends: debhelper-compat (= 13), pkgconf, libssl-dev (>=3.0.0), libpcre2-dev (>=10.0), libmagic-dev (>=1:5.0)
