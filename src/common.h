@@ -9,4 +9,7 @@
 
 #define PATH_MAX_LEN 4096 
 
+void show_help(char *prog);
+void show_version(char *prog);
+
 #endif // COMMON_H
