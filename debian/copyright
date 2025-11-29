@@ -13,6 +13,7 @@ Files:     Makefile.am
            include/handler.h
            src/client.c
            src/client.h
+           src/common.c
            src/common.h
            src/handlers/dynamic_handler.c
            src/handlers/dynamic_handler.h
