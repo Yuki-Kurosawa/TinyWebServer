@@ -3,7 +3,7 @@
 
 void show_help(char *prog)
 {
-    printf("%s - small web server with TLS support and automatic MIME type detection\n", prog);
+    printf("small web server with TLS support and automatic MIME type detection\n\n");
     printf("Usage: %s [OPTIONS]\n", prog);
     printf("OPTIONS:\n");
     printf("  -h, --help     Show this help message\n");
