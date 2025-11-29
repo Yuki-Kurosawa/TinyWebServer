@@ -3,11 +3,12 @@
 
 void show_help(char *prog)
 {
+    printf("%s - small web server with TLS support and automatic MIME type detection\n", prog);
     printf("Usage: %s [OPTIONS]\n", prog);
     printf("OPTIONS:\n");
     printf("  -h, --help     Show this help message\n");
     printf("  -v, --version  Show program version information\n");
-    
+
 }
 
 void show_version(char *prog)
