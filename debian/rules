@@ -5,5 +5,5 @@
 	dh $@ --with autoreconf
 
 override_dh_install:
-	help2man --no-discard-stderr --no-info -N "simple web server with TLS support and automatic MIME type detection" ./yuki > ./yuki.1
+	help2man --no-discard-stderr --no-info -n "simple web server with TLS support and automatic MIME type detection" ./yuki > ./yuki.1
 	dh_install
