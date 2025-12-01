@@ -38,6 +38,7 @@ License:   MIT
 
 Files:     .deps/yuki.Po
            .gitignore
+           .gitattributes
            .vscode/c_cpp_properties.json
            .vscode/settings.json
            README.md
