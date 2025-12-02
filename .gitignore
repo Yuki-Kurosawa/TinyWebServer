@@ -60,3 +60,4 @@ tags
 .deps
 debian/.debhelper
 autom4te.cache
+config.h

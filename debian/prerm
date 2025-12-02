@@ -1,0 +1,23 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        rm -rf /etc/yuki/sites-available/*
+        rm -rf /etc/yuki/sites-enabled/*
+        rm -rf /var/www/html/index.yuki.html
+    ;;
+
+    failed-upgrade)
+    ;;
+
+    *)
+        echo "prerm called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+
+#DEBHELPER#
+
+exit 0

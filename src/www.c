@@ -379,7 +379,7 @@ void read_all_site_configs(const char *sites_dir_path, GlobalConfig *global_conf
 
     d = opendir(sites_dir_path);
     if (!d) {
-        perror("Failed to open sites-enabled directory");
+        perror("Failed to open site configuration directory");
         return;
     }
 

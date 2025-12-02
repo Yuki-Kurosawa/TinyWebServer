@@ -7,3 +7,13 @@ yuki_SOURCES = src/www.c src/common.c src/client.c src/handlers/info.c src/parse
 yuki_LDFLAGS = -pthread 
 
 yuki_LDADD = -lssl -lcrypto -lpcre2-8 -lmagic
+
+globalconfdir = $(sysconfdir)/yuki
+globalconf_DATA = yuki.conf
+
+defaultsitedir = $(prefix)/share/yuki/html
+defaultsite_DATA = html/index.html
+
+defaultsiteconfdir = $(prefix)/share/yuki/sites
+defaultsiteconf_DATA = sites/default
+

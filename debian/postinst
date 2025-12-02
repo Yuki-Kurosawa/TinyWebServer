@@ -1,0 +1,29 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        cp /usr/share/yuki/sites/default /etc/yuki/sites-available/default
+        ln -s /etc/yuki/sites-available/default /etc/yuki/sites-enabled/default 
+        if [ ! -d /var/www/html ]; then
+            mkdir -p /var/www/html/            
+        fi
+        if [ ! -f /var/www/html/index.html ]; then
+            cp /usr/share/yuki/html/index.html /var/www/html/index.html
+        fi
+        cp /usr/share/yuki/html/index.html /var/www/html/index.yuki.html
+    ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+
+#DEBHELPER#
+
+exit 0

@@ -1,6 +1,6 @@
-listen 0.0.0.0:4880;
-listen [::]:6880;
+listen 0.0.0.0:80;
+listen [::]:80;
 
 default_page index.php index.htm index.html;
 
-root /var/www/default/html;
+root /var/www/html;

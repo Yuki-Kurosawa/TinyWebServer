@@ -27,6 +27,7 @@ Files:     Makefile.am
            tests/test.c
            tests/test.h
            cleanenv.sh
+           pkgtest.sh
 Copyright: 1992-2022 Free Software Foundation, Inc.
            2025 Yuki Kurosawa SPDX-License-Identifier: MIT
            2025 Yuki Kurosawa SPDX-License-Identifier: MIT !/bin/bash
@@ -45,10 +46,12 @@ Files:     .deps/yuki.Po
            config.h.in
            configure.ac
            sites/default
-           www.conf
+           yuki.conf
            x.crt
            x.pem
            x_chain.crt
+           html/index.html
+           .dir
 Copyright: 2025 Yuki Kurosawa
 License:   MIT
 

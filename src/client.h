@@ -21,11 +21,11 @@
 
 // Configuration paths (can be overridden by build system)
 #ifndef GLOBAL_CONFIG_PATH
-#define GLOBAL_CONFIG_PATH "webserver.conf"
+#define GLOBAL_CONFIG_PATH "/etc/yuki/yuki.conf"
 #endif
 
 #ifndef SITES_DIR_PATH
-#define SITES_DIR_PATH "sites-enabled"
+#define SITES_DIR_PATH "/etc/yuki/sites-enabled"
 #endif
 
 #define MAX_LISTEN_SOCKETS 50 // Max number of unique listen sockets (IP:Port:SSL)
