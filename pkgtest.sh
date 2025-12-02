@@ -4,7 +4,7 @@
 
 ./cleanenv.sh
 dpkg-buildpackage -sa --force-sign
-lintian
+lintian --fail-on error --allow-root --display-info --pedantic
 sudo dpkg -i ../*.deb
 yuki --version
 sudo yuki
