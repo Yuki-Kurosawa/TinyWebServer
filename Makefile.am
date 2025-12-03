@@ -17,3 +17,5 @@ defaultsite_DATA = html/index.html
 defaultsiteconfdir = $(prefix)/share/yuki/sites
 defaultsiteconf_DATA = sites/default
 
+servicedir = $(prefix)/lib/systemd/system
+service_DATA = yuki-web.service

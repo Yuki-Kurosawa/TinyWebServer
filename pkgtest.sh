@@ -7,5 +7,8 @@ dpkg-buildpackage -sa --force-sign
 lintian --fail-on error --allow-root --display-info --pedantic
 sudo dpkg -i ../*.deb
 yuki --version
-sudo yuki
+sudo systemctl start yuki-web.service
+sudo systemctl status yuki-web.service
+curl http://localhost/ --verbose
+sudo systemctl stop yuki-web.service
 sudo apt purge -y yuki

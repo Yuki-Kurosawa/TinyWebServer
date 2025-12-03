@@ -52,6 +52,7 @@ Files:     .deps/yuki.Po
            x_chain.crt
            html/index.html
            .dir
+           yuki-web.service
 Copyright: 2025 Yuki Kurosawa
 License:   MIT
 

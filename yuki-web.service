@@ -1,0 +1,15 @@
+[Unit]
+Description=Yuki Web Server Service
+After=network.target
+Documentation=man:yuki(1)
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/yuki
+Restart=always
+RestartSec=10
+SyslogIdentifier=yuki-web
+
+[Install]
+WantedBy=multi-user.target

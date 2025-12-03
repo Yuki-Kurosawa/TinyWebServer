@@ -12,6 +12,10 @@ case "$1" in
             cp /usr/share/yuki/html/index.html /var/www/html/index.html
         fi
         cp /usr/share/yuki/html/index.html /var/www/html/index.yuki.html
+
+        #systemctl daemon-reload
+        #systemctl enable yuki-web.service
+        
     ;;
 
     abort-upgrade|abort-remove|abort-deconfigure)
