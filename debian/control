@@ -1,7 +1,7 @@
 Source: yuki
 Section: web
 Priority: optional
-Maintainer: Yuki Kurosawa HotKey <yuki@ksyuki.com>
+Maintainer: Yuki Kurosawa <yuki@ksyuki.com>
 Build-Depends: debhelper-compat (= 13), pkgconf, help2man , libssl-dev (>=3.0.0), libpcre2-dev (>=10.0), libmagic-dev (>=1:5.0)
 Standards-Version: 4.7.2
 Homepage: https://github.com/Yuki-Kurosawa/TinyWebServer
