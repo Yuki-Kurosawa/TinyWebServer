@@ -62,7 +62,7 @@ void ProcessRequest(Request *req, Response *res)
         req->path ? req->path : "N/A",
         req->method ? (req->method == METHOD_GET ? "GET" : "POST") : "N/A");
 
-	fprintf(stderr,"after html\n");
+	
 
     // Add query parameters if any
     if (req->query_count > 0 && req->query != NULL) {

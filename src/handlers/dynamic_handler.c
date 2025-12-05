@@ -51,7 +51,7 @@ bool DynamicHandlerCheckPage(Request *req, char *path) {
         strcpy(base_filename, filename_start);
     }
     
-    int snprintf_result = snprintf(dynamic_path_base, sizeof(dynamic_path_base), "%s%s%s.so",
+    int snprintf_result = snprintf(file_to_serve, sizeof(dynamic_path_base), "%s%s%s.so",
                                    directory_path, "lib", base_filename);
 
     struct stat file_stat;
