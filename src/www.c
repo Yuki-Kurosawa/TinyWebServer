@@ -365,6 +365,7 @@ SiteConfig *parse_site_file(const char *filepath, GlobalConfig *global_config) {
             fprintf(stderr, "Error loading SSL context for site from %s. Make sure certificate files exist and are valid.\n", filepath);
             // Optionally, set a flag or disable site if SSL context fails to load
         }
+
     }
 
     return site;
@@ -536,14 +537,26 @@ SSL_CTX *create_ssl_context(const char *cert_file, const char *key_file, const c
         }
     }
 
+    
+
     // Recommended security options (disable old, insecure protocols)
-    SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1);
+    SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1 | SSL_OP_CIPHER_SERVER_PREFERENCE);
     // Use SSL_CTX_set_cipher_list for setting ciphers for TLSv1.2 and earlier
-    if (SSL_CTX_set_cipher_list(ctx, "HIGH:!aNULL:!kRSA:!PSK:!SRP:!DSS:!RC4:!MD5:!EXP:!LOW:!NULL:!eNULL:!DES:!3DES:!ADH:!AECDH") <= 0) {
+
+    //"TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256:TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:TLS_ECDHE_RSA_WITH_ARIA_128_GCM_SHA256:TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:TLS_ECDHE_RSA_WITH_ARIA_256_GCM_SHA384:TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
+
+    //"HIGH:!aNULL:!kRSA:!PSK:!SRP:!DSS:!RC4:!MD5:!EXP:!LOW:!NULL:!eNULL:!DES:!3DES:!ADH:!AECDH"
+
+    if (SSL_CTX_set_cipher_list(ctx, "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256") <= 0) {
         ERR_print_errors_fp(stderr);
         fprintf(stderr, "Error setting cipher list.\n");
         SSL_CTX_free(ctx);
         return NULL;
+    }
+
+    if (SSL_CTX_set_ciphersuites(ctx, "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256") <= 0) {
+        ERR_print_errors_fp(stderr);
+        fprintf(stderr, "Error setting TLS 1.3 ciphersuites.\n");
     }
 
     return ctx;
