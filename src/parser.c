@@ -14,11 +14,6 @@
 #include "handlers/static_file.h" 
 #include "handlers/dynamic_handler.h" 
 
-#define PCRE2_CODE_UNIT_WIDTH 8
-#include <pcre2.h> // For PCRE2 regex matching
-
-
-
 char* URLDecode(const char* encoded_str) {
     if (encoded_str == NULL) {
         return NULL;

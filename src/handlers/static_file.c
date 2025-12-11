@@ -7,8 +7,7 @@
 #include <string.h>
 #include <sys/stat.h> 
 #include <unistd.h>   
-#include <errno.h>    
-#include <magic.h>    
+#include <errno.h>      
 #include "../common.h" 
 
 

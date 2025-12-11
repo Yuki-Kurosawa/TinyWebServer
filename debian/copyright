@@ -24,6 +24,7 @@ Files:     Makefile.am
            src/parser.c
            src/parser.h
            src/www.c
+           src/version.h
            tests/test.c
            tests/test.h
            cleanenv.sh
