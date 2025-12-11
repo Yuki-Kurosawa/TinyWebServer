@@ -757,9 +757,9 @@ void ResponseObjectToPacket(Response *resp, char *response_buffer_ptr, size_t *r
 void free_request_members(Request *req) {
     if (req == NULL) return;
 
-    free(req->path_and_query);
-    free(req->path);
-    free(req->query_string);
+    if (req->path_and_query) free(req->path_and_query);
+    if (req->path) free(req->path);
+    if (req->query_string) free(req->query_string);
     if (req->query) {
         for (int i = 0; i < req->query_count; ++i) {
             free(req->query[i].key);
@@ -767,10 +767,10 @@ void free_request_members(Request *req) {
         }
         free(req->query);
     }
-    free(req->host);
-    free(req->user_agent);
-    free(req->accept);
-    free(req->content_type);
+    if (req->host) free(req->host);
+    if (req->user_agent) free(req->user_agent);
+    //if (req->accept) free(req->accept);
+    if (req->content_type) free(req->content_type);
     if (req->cookies) {
         for (int i = 0; i < req->cookie_count; ++i) {
             free(req->cookies[i].key);
@@ -799,9 +799,9 @@ void free_request_members(Request *req) {
 void free_response_members(Response *res) {
     if (res == NULL) return;
 
-    free(res->content_type);
-    free(res->status_msg);
-    free(res->server);
+    if (res->content_type) free(res->content_type);
+    if (res->status_msg) free(res->status_msg);
+    if (res->server) free(res->server);
     if (res->cookies) {
         for (int i = 0; i < res->cookie_count; ++i) {
             free(res->cookies[i].key);
@@ -816,7 +816,7 @@ void free_response_members(Response *res) {
         }
         free(res->headers);
     }
-    free(res->body);
+    if (res->body) free(res->body);
 }
 
 
