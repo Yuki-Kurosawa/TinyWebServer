@@ -537,7 +537,10 @@ SSL_CTX *create_ssl_context(const char *cert_file, const char *key_file, const c
         }
     }
 
-    
+    if (SSL_CTX_set1_groups_list(ctx, "X25519MLKEM768:X25519:P-256:P-384:P-521") <= 0) {
+        ERR_print_errors_fp(stderr);
+        fprintf(stderr, "Error setting ECC groups list.\n");        
+    }
 
     // Recommended security options (disable old, insecure protocols)
     SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1 | SSL_OP_CIPHER_SERVER_PREFERENCE);
