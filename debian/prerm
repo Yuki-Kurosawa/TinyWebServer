@@ -7,9 +7,6 @@ case "$1" in
         rm -rf /etc/yuki/sites-enabled/*
         rm -rf /var/www/html/index.yuki.html
 
-        #systemctl disable yuki-web.service
-        #systemctl stop yuki-web.service
-        #systemctl daemon-reload
     ;;
 
     failed-upgrade)
