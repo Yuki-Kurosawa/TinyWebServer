@@ -1,3 +1,9 @@
+yuki (1.0.1-1) unstable; urgency=low
+
+  * Fix path combine error of static_file.c
+
+ -- Yuki Kurosawa <yuki@ksyuki.com>  Fri, 21 Nov 2025 15:07:15 +0800
+
 yuki (1.0.0-1) unstable; urgency=low
 
   * Initial release. (Closes: #1121986)

@@ -903,7 +903,7 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
             }
             else
             {
-                printf("DEBUG: Begin Trying %s%s\n", req->path,req->server_info->default_page[j]);                
+                printf("DEBUG: Begin Trying %s/%s\n", req->path,req->server_info->default_page[j]);                
                 size_t old_len = strlen(req->path);
                 if(req->path[old_len-1]=='/')
                 {
@@ -1055,7 +1055,7 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
                 }
                 else
                 {
-                    printf("DEBUG: End Trying failed %s%s\n", req->path,req->server_info->default_page[j]);
+                    printf("DEBUG: End Trying failed %s/%s\n", req->path,req->server_info->default_page[j]);
                 }
             }
         }
