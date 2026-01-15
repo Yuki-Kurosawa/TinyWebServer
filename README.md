@@ -26,7 +26,7 @@ yuki is free and open source software, distributed under the terms of [MIT licen
   - [Installing dependencies](#installing-dependencies)
     - [Installing compiler and make utility](#installing-compiler-and-make-utility)
     - [Installing dependency libraries](#installing-dependency-libraries)
-  - [Cloning the yuku GitHub repository](#cloning-the-yuku-github-repository)
+  - [Cloning the yuki GitHub repository](#cloning-the-yuki-github-repository)
   - [Development build](#development-build)
   - [Configuring the build](#configuring-the-build)
   - [Compiling](#compiling)
@@ -79,7 +79,7 @@ Follow these steps to download and install precompiled yuki binaries. You may al
 yuki binaries are built and distributed in two versions: stable and mainline. Stable binaries are built from stable branches and only contain critical fixes backported from the mainline version. Mainline binaries are built from the [master branch](https://github.com/Yuki-Kurosawa/TinyWebServer/tree/master) and contain the latest features and bugfixes. You'll need to decide which is appropriate for your purposes.
 
 ## Linux binary installation process
-The NGINX binary installation process takes advantage of package managers native to specific Linux distributions. 
+The yuki binary installation process takes advantage of package managers native to specific Linux distributions. 
 
 Debian: [You can track releases here](https://qa.debian.org/developer.php?login=yuki@ksyuki.com)
 
@@ -111,7 +111,7 @@ sudo apt install gcc make
 sudo apt install pkgconf libssl-dev libpcre2-dev libmagic-dev 
 ```
 
-## Cloning the yuku GitHub repository
+## Cloning the yuki GitHub repository
 Using your preferred method, clone the yuki repository into your development directory. See [Cloning a GitHub Repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) for additional help.
 
 ```bash
@@ -151,7 +151,7 @@ After successful compilation, a binary will be generated at `<YUKI_SRC_ROOT_DIR>
 
 ```bash
 sudo make install
-sudo ./debian/postinst
+sudo ./debian/postinst configure
 ```
 
 > [!IMPORTANT]
