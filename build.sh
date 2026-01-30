@@ -14,15 +14,15 @@ src/www.c src/common.c src/client.c src/handlers/info.c \
 -pthread -lssl -lcrypto \
 -lpcre2-8 -lmagic
 
-help2man --no-discard-stderr ./yuki > ./yuki.1
+#help2man --no-discard-stderr ./yuki > ./yuki.1
 #man ./yuki.1
 
-#gcc -o libtest.so -shared -fPIC \
-#tests/test.c \
-#-I./include
+gcc -o libtest.so -shared -fPIC \
+tests/test.c \
+-I./include
 
 #file libtest.so
-#sudo cp libtest.so /var/www/html/libtest.so
+sudo cp libtest.so /var/www/html/libtest.so
 
 
-#./yuki
+./yuki

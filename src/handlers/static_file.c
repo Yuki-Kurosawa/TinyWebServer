@@ -13,10 +13,9 @@
 
 
 bool StaticFileCheckPage(Request *req, char *path) {
-    char file_to_serve[PATH_MAX_LEN];    
+    char* file_to_serve;    
     
-    int path_snprintf_result = snprintf(file_to_serve, sizeof(file_to_serve), "%s%s/%s",
-                                        req->server_info->root_dir, req->path,path);
+    file_to_serve=PathCombine(PathCombine(req->server_info->root_dir, req->path),path);
     printf("StaticFileCheckPage: Checking existence of file '%s'\n", file_to_serve);
 
     struct stat path_stat;

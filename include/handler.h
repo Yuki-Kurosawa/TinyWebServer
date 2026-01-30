@@ -6,6 +6,9 @@
 
 #include <stddef.h> // For size_t
 #include <stdbool.h> // For bool
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 // Constants for request/response limits (can be adjusted)
 #define MAX_METHOD_LEN 10       // e.g., "GET", "POST"
@@ -167,5 +170,119 @@ typedef struct {
 	RequestHandler handler; // Pointer to the handler function
 	CheckPageFunction check_page; // Pointer to the function to check if the page exists
 } Handler;
+
+inline static void PathRewrite(char* buffer,char* path,char* lextra,char* rextra)
+{
+	if (!path || !buffer) return;
+	if (strlen(path) == 0) return;
+
+    char* lastSlash = strrchr(path, '/');
+    char* fileNameStart = (lastSlash) ? lastSlash + 1 : path;
+
+    int dirLen = fileNameStart - path;
+    if (dirLen > 0) {
+        memcpy(buffer, path, dirLen);
+    }
+    char* p = buffer + dirLen;
+
+    char* lastDot = strrchr(fileNameStart, '.');
+    
+    if (lextra && lastDot != fileNameStart) {
+        strcpy(p, lextra);
+        p += strlen(lextra);
+    }
+
+    if (lastDot) {
+        int stemLen = lastDot - fileNameStart;
+        memcpy(p, fileNameStart, stemLen);
+        p += stemLen;
+    } else {
+        strcpy(p, fileNameStart);
+        p += strlen(fileNameStart);
+    }
+
+    if (rextra) {
+        strcpy(p, rextra);
+        p += strlen(rextra);
+    }
+
+    *p = '\0'; 
+}
+
+inline static char* PathCombineExtend(char* left,char* right, int mode,char* mode_lextra,char* mode_rextra){
+	char* buffer=malloc(MAX_URI_LEN);
+    char* temp_right=malloc(MAX_URI_LEN);
+	
+    size_t len_l = strlen(left);
+    int left_has_slash = (len_l > 0 && left[len_l - 1] == '/');
+    int right_has_slash = (right[0] == '/');
+
+	size_t len_r = strlen(right);
+
+    /*if (mode == 1) {
+        const char* r_start = right;
+    	while (*r_start == '/') r_start++;
+        const char* dot = strrchr(r_start, '.');
+        int name_len = dot ? (int)(dot - r_start) : (int)strlen(r_start);
+        snprintf(temp_right, MAX_URI_LEN, "%s%.*s%s", mode_lextra, name_len, r_start, mode_rextra);
+		//printf("DEBUG: PathCombineExtend modified right to: %s\n", temp_right);
+    } else {  */      
+        strncpy(temp_right, right, MAX_URI_LEN);
+	//}
+	
+	//printf("DEBUG: %s %d\n","/",'/');
+
+	printf("DEBUG: PathCombine called with left: %s (%d,%d), right: %s (%d,%d)\n", left,left_has_slash,left[len_l - 1],
+		 temp_right,right_has_slash,temp_right[0]);
+
+    if(len_r >0 && len_l >0)
+    {
+		if (left_has_slash && right_has_slash) 
+		{        
+			snprintf(buffer, MAX_URI_LEN, "%s%s", left, temp_right + 1);
+		}
+		else if (!left_has_slash && right_has_slash) 
+		{        
+			snprintf(buffer, MAX_URI_LEN, "%s%s", left, temp_right);
+		} 
+		else if (!left_has_slash && !right_has_slash) 
+		{        
+			snprintf(buffer, MAX_URI_LEN, "%s/%s", left, temp_right);
+		} 
+		else
+		{        
+			snprintf(buffer, MAX_URI_LEN, "%s%s", left, temp_right);
+		}
+	}
+	else if (len_l > 0 && len_r==0)
+	{
+		snprintf(buffer, MAX_URI_LEN, "%s", left);
+	}
+	else if (len_l == 0 && len_r >0)
+	{
+		snprintf(buffer, MAX_URI_LEN, "%s", temp_right);
+	}
+	else
+	{
+		snprintf(buffer, MAX_URI_LEN, "");
+	}
+
+	if(mode==1)
+	{
+		char* buffer1=malloc(MAX_URI_LEN);
+		strncpy(buffer1,buffer,MAX_URI_LEN);
+		PathRewrite(buffer,buffer1,mode_lextra,mode_rextra);		
+		free(buffer1);
+	}
+
+	printf("DEBUG: PathCombineExtend result: %s\n", buffer);
+	free(temp_right);
+	return buffer;
+}
+
+inline static char* PathCombine(char* left,char* right) {
+	return PathCombineExtend(left,right,0,"","");
+}
+
 
 #endif // HANDLER_H
