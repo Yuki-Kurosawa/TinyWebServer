@@ -1,4 +1,4 @@
-Yuki — Tiny Web Server 🚀
+Yuki Web Server 🚀
 =========================
 
 [![Project Status: Active – The project has reached a stable, usable state and is being actively developed.](https://www.repostatus.org/badges/latest/active.svg)](https://www.repostatus.org/#active)
@@ -12,7 +12,7 @@ yuki is free and open source software, distributed under the terms of [MIT licen
 ---
 
 ## Table of Contents
-- [Yuki — Tiny Web Server 🚀](#yuki--tiny-web-server-)
+- [Yuki Web Server 🚀](#yuki-web-server-)
   - [Table of Contents](#table-of-contents)
 - [How it works](#how-it-works)
   - [Modules](#modules)
@@ -32,6 +32,7 @@ yuki is free and open source software, distributed under the terms of [MIT licen
   - [Compiling](#compiling)
   - [Location of binary and installation](#location-of-binary-and-installation)
   - [Running and testing the installed binary](#running-and-testing-the-installed-binary)
+  - [License](#license)
 
 # How it works
 yuki is installed software with binary packages available for Linux distributions. If you want to use latest version with latest patches/features/fixes, just build yuki from source.
@@ -62,7 +63,7 @@ yuki -v
 ```
 
 ## Configurations
-yuki is highly flexible and configurable. Provisioning the software is achieved via text-based config file(s) accepting parameters called "[Directives](#)".
+yuki is highly flexible and configurable. Provisioning the software is achieved via text-based config file(s) accepting parameters called "[Directives](CONFIGURATION.md)".
 
 > [!NOTE]
 > The set of directives available to your distribution of yuki is dependent on which [modules](#modules) have been made available to it.
@@ -177,3 +178,5 @@ The output of which should contains:
 It Works!
 ```
 
+## License
+License: MIT

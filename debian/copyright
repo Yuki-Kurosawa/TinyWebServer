@@ -43,6 +43,7 @@ Files:     .gitignore
            .vscode/settings.json
            README.md
            CODE_OF_CONDUCT.md
+           CONFIGURATION.md
            config.h.in
            configure.ac
            sites/default

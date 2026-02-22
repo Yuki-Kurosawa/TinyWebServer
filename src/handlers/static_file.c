@@ -58,15 +58,13 @@ void StaticFileProcessRequest(Request *req, Response *res) {
         return;
     }
 
-    char file_to_serve[PATH_MAX_LEN];
+    char* file_to_serve;
+    
+    file_to_serve=PathCombine(req->server_info->root_dir, req->path);
     
     
-    int path_snprintf_result = snprintf(file_to_serve, sizeof(file_to_serve), "%s%s",
-                                        req->server_info->root_dir, req->path);
-
-    
-    if (path_snprintf_result >= (int)sizeof(file_to_serve) || path_snprintf_result < 0) {
-        fprintf(stderr, "StaticFileProcessRequest: Constructed path too long or snprintf error for '%s%s'\n",
+    if (file_to_serve == NULL) {
+        fprintf(stderr, "StaticFileProcessRequest: PathCombine returned NULL for '%s%s'\n",
                 req->server_info->root_dir, req->path);
         
         if (res->body) free(res->body);
@@ -76,7 +74,7 @@ void StaticFileProcessRequest(Request *req, Response *res) {
         res->status_msg = strdup("Internal Server Error");
         if (res->content_type) free(res->content_type);
         res->content_type = strdup("text/html");
-        res->body = strdup("<html><body><h1>500 Internal Server Error</h1><p>File path too long.</p></body></html>");
+        res->body = strdup("<html><body><h1>500 Internal Server Error</h1><p>File path too long or invalid.</p></body></html>");
         res->body_len = strlen(res->body);
         return;
     }
