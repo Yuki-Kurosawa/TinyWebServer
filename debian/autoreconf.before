@@ -30,7 +30,7 @@ c2ffa085a0fd0e97bd44aa474dff2c0a  ./cleanenv.sh
 36069a189284ed991eeed08aebe10665  ./sites/default
 e726c5c3e927c18af7e668d8a8df5194  ./CODE_OF_CONDUCT.md
 f5cddb38d84680c80861b354386331f9  ./configure.ac
-d41d8cd98f00b204e9800998ecf8427e  ./CONFIGURATION.md
+432651a79bc99960998f153603b363b3  ./CONFIGURATION.md
 21885a0bd1f2ccb8c4966023d9dc79b4  ./x_chain.crt
 88abc44ad89eb938872aac429d053b9a  ./tests/test.c
 bc167f6180082c795359b0788d3e8480  ./tests/test.h

@@ -43,7 +43,7 @@ e1a73da7273370768abd8eae457b5fc3  ./autom4te.cache/output.1
 e1a73da7273370768abd8eae457b5fc3  ./autom4te.cache/output.0
 e726c5c3e927c18af7e668d8a8df5194  ./CODE_OF_CONDUCT.md
 f5cddb38d84680c80861b354386331f9  ./configure.ac
-d41d8cd98f00b204e9800998ecf8427e  ./CONFIGURATION.md
+432651a79bc99960998f153603b363b3  ./CONFIGURATION.md
 e9a88b18b0fff235fc44657b5ce9acb0  ./Makefile.in
 21885a0bd1f2ccb8c4966023d9dc79b4  ./x_chain.crt
 c3a5fcb3203295bcc77739d9c56d6df2  ./compile
