@@ -1,4 +1,4 @@
-01489700bbc2b44857aae447efc1a9aa  ./README.md
+62c7a3bcdf9aab3e500802d32a696a54  ./README.md
 3d8b857b35b534dcd8bddf8669e981ad  ./html/index.html
 f716d28165504e263892167930d9c7e5  ./.vscode/settings.json
 2caaa15cc37834bad68bf01af4cb9706  ./.vscode/c_cpp_properties.json
@@ -20,16 +20,17 @@ df3a10d833d85f75925ff8f85e65ad59  ./src/client.c
 f700c403cf9d5d490d5b5fcbd7c2b673  ./src/handlers/info.h
 cf8e8c67e0ff145946ea71cfb5b53fcc  ./src/handlers/static_file.h
 410ffffe0cae4a097f8e650a236995a7  ./src/handlers/dynamic_handler.h
-f4b34bf141863ea62c62b7713bbad85a  ./src/handlers/static_file.c
+df5d1609118b8d5c58f154286201356d  ./src/handlers/static_file.c
 64a47ee751f25fe6228a3b5becb7b654  ./src/handlers/dynamic_handler.c
 105a658c10f4fec1ed92031e5664842e  ./src/handlers/info.c
 90ca3ab35866605c5cb6f0b136fbd904  ./src/parser.c
 4ecd55f0446bdf4459603e355b0f87eb  ./src/parser.h
 fd5e76074e6b1c12e4db9d47d3b1792c  ./build.sh
-e9394ee867971e3fb2919db17d0c6a5d  ./cleanenv.sh
+c2ffa085a0fd0e97bd44aa474dff2c0a  ./cleanenv.sh
 36069a189284ed991eeed08aebe10665  ./sites/default
 e726c5c3e927c18af7e668d8a8df5194  ./CODE_OF_CONDUCT.md
 f5cddb38d84680c80861b354386331f9  ./configure.ac
+d41d8cd98f00b204e9800998ecf8427e  ./CONFIGURATION.md
 21885a0bd1f2ccb8c4966023d9dc79b4  ./x_chain.crt
 88abc44ad89eb938872aac429d053b9a  ./tests/test.c
 bc167f6180082c795359b0788d3e8480  ./tests/test.h
