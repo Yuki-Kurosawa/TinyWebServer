@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Yuki Kurosawa
+// Copyright (c) 2025-2026 Yuki Kurosawa
 // SPDX-License-Identifier: MIT
 // client.c
 #include "client.h" // Include our own header (which now includes parser.h)

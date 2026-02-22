@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Yuki Kurosawa
+// Copyright (c) 2025-2026 Yuki Kurosawa
 // SPDX-License-Identifier: MIT
 #ifndef COMMON_H
 #define COMMON_H
@@ -11,8 +11,8 @@
 #include <linux/version.h>
 #include "/usr/include/magic.h" // For libmagic file type detection
 
-#define SERVER_MOTD "Yuki's Tiny Web Server"
-#define SERVER_MOTD_TO_CLIENT "YukiWebServer/1.0"
+#define SERVER_MOTD "Yuki Web Server"
+#define SERVER_MOTD_TO_CLIENT "YukiWebServer/" YUKI_VERSION_STR
 #define CACHE_SIZE 131072*1024 // 128MiB
 
 #define PATH_MAX_LEN 4096 
