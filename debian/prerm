@@ -2,11 +2,14 @@
 set -e
 
 case "$1" in
-    remove|upgrade|deconfigure)
+    remove|deconfigure)
         rm -rf /etc/yuki/sites-available/*
         rm -rf /etc/yuki/sites-enabled/*
         rm -rf /var/www/html/index.yuki.html
 
+    ;;
+
+    upgrade)
     ;;
 
     failed-upgrade)

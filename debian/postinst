@@ -3,8 +3,11 @@ set -e
 
 case "$1" in
     configure)
-        cp /usr/share/yuki/sites/default /etc/yuki/sites-available/default
-        ln -s /etc/yuki/sites-available/default /etc/yuki/sites-enabled/default 
+        if [ ! -f /etc/yuki/sites-available/default ]; then
+            cp /usr/share/yuki/sites/default /etc/yuki/sites-available/default
+            ln -s /etc/yuki/sites-available/default /etc/yuki/sites-enabled/default 
+        fi
+        
         if [ ! -d /var/www/html ]; then
             mkdir -p /var/www/html/            
         fi

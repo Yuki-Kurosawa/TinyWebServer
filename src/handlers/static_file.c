@@ -147,7 +147,14 @@ void StaticFileProcessRequest(Request *req, Response *res) {
             } else {
                 
                 if (res->content_type) free(res->content_type);
-                res->content_type = strdup(mime_type); 
+                if(strstr(req->path, ".js")) {
+                    res->content_type = strdup("application/javascript");
+                }
+                else if(strstr(req->path, ".css")) {
+                    res->content_type = strdup("text/css");
+                } else {
+                    res->content_type = strdup(mime_type); 
+                }
             }
             magic_close(magic_cookie); 
         }
