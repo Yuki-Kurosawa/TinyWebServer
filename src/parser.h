@@ -8,6 +8,6 @@
 #include "common.h" 
 #include "../include/handler.h"
 
-void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size_t *resp_len, char response[]);
+void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], char **response_out, size_t *response_len_out);
 
 #endif // PARSER_H

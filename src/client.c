@@ -79,26 +79,20 @@ void *handle_client(void *thread_args_ptr) {
 
     // --- Allocate buffers on the heap to avoid stack overflow ---
     // MAX_REQUEST_SIZE for request buffer (for headers, POST body will be handled by parser)
-    // CACHE_SIZE (from parser.h) for response buffer (to hold full response including file content)
     char *request_buffer = (char *)malloc(MAX_REQUEST_SIZE + 1); // +1 for null terminator
-    char *response_buffer = (char *)malloc(MAX_REQUEST_SIZE+CACHE_SIZE); 
 
     if (!request_buffer) {
         perror("Failed to allocate request_buffer in handle_client");
         close(sock);
         pthread_exit(NULL);
     }
-    if (!response_buffer) {
-        perror("Failed to allocate response_buffer in handle_client");
-        free(request_buffer); // Clean up already allocated request buffer
-        close(sock);
-        pthread_exit(NULL);
-    }
     
-    // Initialize buffers to zero
+    // Initialize request buffer to zero
     memset(request_buffer, 0, MAX_REQUEST_SIZE + 1);
-    memset(response_buffer, 0, MAX_REQUEST_SIZE+CACHE_SIZE);
 
+    // Response buffer is allocated on demand inside HandleRequest (char **response_out)
+    // and freed at the end of this function. It starts as NULL.
+    char *response_buffer = NULL;
     size_t actual_response_len = 0; // This will be filled by HandleRequest
 
 
@@ -356,10 +350,10 @@ void *handle_client(void *thread_args_ptr) {
     // --- Prepare and Send the HTTP Response (using SSL_write or write) ---
     // HandleRequest now receives ServerInfo* directly
     HandleRequest(server_info, total_bytes_received, request_buffer,
-                &actual_response_len, response_buffer);
+                &response_buffer, &actual_response_len);
 
     // server_info and its strdup'd members are freed by free_request_members in parser.c
-    // Note: response_buffer is now heap-allocated in this function and will be freed here.
+    // response_buffer is allocated on demand inside HandleRequest and freed below.
 
     if (use_ssl) {
         if (SSL_write(ssl, response_buffer, actual_response_len) <= 0) {

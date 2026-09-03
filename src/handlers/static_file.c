@@ -13,9 +13,15 @@
 
 
 bool StaticFileCheckPage(Request *req, char *path) {
+    char normalized[PATH_MAX_LEN];
+    if (NormalizeRequestPath(req->path, normalized, sizeof(normalized)) != 0) {
+        // Path escapes the document root -> treat as not found
+        return false;
+    }
+
     char* file_to_serve;    
     
-    file_to_serve=PathCombine(PathCombine(req->server_info->root_dir, req->path),path);
+    file_to_serve=PathCombine(PathCombine(req->server_info->root_dir, normalized),path);
     printf("StaticFileCheckPage: Checking existence of file '%s'\n", file_to_serve);
 
     struct stat path_stat;
@@ -58,9 +64,26 @@ void StaticFileProcessRequest(Request *req, Response *res) {
         return;
     }
 
+    char normalized[PATH_MAX_LEN];
+    if (NormalizeRequestPath(req->path, normalized, sizeof(normalized)) != 0) {
+        // Path escapes the document root -> 404
+        fprintf(stderr, "StaticFileProcessRequest: path traversal attempt rejected for '%s'\n", req->path);
+
+        if (res->body) free(res->body);
+
+        res->status_code = 404;
+        if (res->status_msg) free(res->status_msg);
+        res->status_msg = strdup("Not Found");
+        if (res->content_type) free(res->content_type);
+        res->content_type = strdup("text/html");
+        res->body = strdup("<html><body><h1>404 Not Found</h1><p>The requested URL was not found on this server.</p></body></html>");
+        res->body_len = strlen(res->body);
+        return;
+    }
+
     char* file_to_serve;
     
-    file_to_serve=PathCombine(req->server_info->root_dir, req->path);
+    file_to_serve=PathCombine(req->server_info->root_dir, normalized);
     
     
     if (file_to_serve == NULL) {

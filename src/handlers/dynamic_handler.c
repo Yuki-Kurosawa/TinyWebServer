@@ -17,10 +17,15 @@
 #define PATH_MAX_LEN 4096 
 
 bool DynamicHandlerCheckPage(Request *req, char *path) {
+    char normalized[PATH_MAX_LEN];
+    if (NormalizeRequestPath(req->path, normalized, sizeof(normalized)) != 0) {
+        return false; // Path escapes the document root
+    }
+
     char file_to_serve1[PATH_MAX_LEN];    
     
     int path_snprintf_result = snprintf(file_to_serve1, sizeof(file_to_serve1), "%s%s%s",
-                                        req->server_info->root_dir, req->path,path);
+                                        req->server_info->root_dir, normalized,path);
 
     printf("DynamicHandlerCheckPage: Script Path: %s \n",file_to_serve1);
 
@@ -99,7 +104,24 @@ void DynamicHandlerProcessRequest(Request *req, Response *res) {
     char file_to_serve[PATH_MAX_LEN];
     char dynamic_path_base[PATH_MAX_LEN]; 
 
-    const char *original_path = req->path;
+    char normalized[PATH_MAX_LEN];
+    if (NormalizeRequestPath(req->path, normalized, sizeof(normalized)) != 0) {
+        // Path escapes the document root -> 404
+        fprintf(stderr, "DynamicHandlerProcessRequest: path traversal attempt rejected for '%s'\n", req->path);
+
+        if (res->status_msg) free(res->status_msg);
+        if (res->content_type) free(res->content_type);
+        if (res->body) free(res->body);
+
+        res->status_code = 404;
+        res->status_msg = strdup("Not Found");
+        res->content_type = strdup("text/html");
+        res->body = strdup("<html><body><h1>404 Not Found</h1><p>The requested URL was not found on this server.</p></body></html>");
+        res->body_len = strlen(res->body);
+        return;
+    }
+
+    const char *original_path = normalized;
     char *last_slash = strrchr(original_path, '/');
     const char *filename_start;
     char directory_path[PATH_MAX_LEN];

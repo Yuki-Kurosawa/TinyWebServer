@@ -816,9 +816,9 @@ void free_response_members(Response *res) {
 
 
 /* the http request outer handler */
-void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size_t *resp_len, char response[])
+void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], char **response_out, size_t *response_len_out)
 {
-	*resp_len = 0;
+	*response_len_out = 0;
 
 	if (req_len == 0 || request == NULL) {
 		return;
@@ -1211,6 +1211,12 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
 	}
 
 	size_t response_size = CACHE_SIZE; // Use CACHE_SIZE as initial buffer size
+	// Grow the buffer so the full body fits; prevents truncation and the
+	// Content-Length / body mismatch that would hang the client.
+	size_t header_budget = 1024; // fixed headers + typical custom headers
+	if (resp->body_len + header_budget > response_size) {
+		response_size = resp->body_len + header_budget;
+	}
 	char *response_body = (char *)malloc(response_size);
 	if (response_body == NULL) {
 		perror("malloc failed for response_body in HandleRequest");
@@ -1223,10 +1229,9 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], size
 
 	ResponseObjectToPacket(resp, response_body, &response_size); // response_size will be updated with actual length
 
-	memcpy(response, response_body, response_size);
-	*resp_len = response_size; // Update the output length
-
-	free(response_body);
+	// Transfer ownership of the response buffer to the caller (freed in client.c).
+	*response_out = response_body;
+	*response_len_out = response_size;
 
     // Free dynamically allocated members of Request and Response
     free_request_members(req);
