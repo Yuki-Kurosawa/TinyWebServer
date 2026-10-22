@@ -4,7 +4,7 @@ Upstream-Contact: Yuki Kurosawa <yuki@ksyuki.com>
 Source: https://github.com/Yuki-Kurosawa/TinyWebServer.git
 
 Files:     Makefile.am
-           Makefile.make
+           test_keepalive.py
            build.sh
            config.guess
            config.sub

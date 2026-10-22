@@ -1,6 +1,14 @@
+yuki (1.0.2-1) unstable; urgency=low
+
+  * New upstream release
+  * Fix MIME for NodeJS Apps
+  * Fix Some memory leaks and attack protections
+
+ -- Yuki Kurosawa <yuki@ksyuki.com>  Thu, 22 Oct 2026 15:40:15 +0800
+
 yuki (1.0.1-1) unstable; urgency=low
 
-  * New upstream release (Closes: #1121986)
+  * New upstream release
   * Fix path combine error of static_file.c
 
  -- Yuki Kurosawa <yuki@ksyuki.com>  Sun, 22 Feb 2026 12:07:15 +0800

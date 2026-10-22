@@ -1,4 +1,7 @@
+# Copyright (c) 2025-2026 Yuki Kurosawa
+# SPDX-License-Identifier: MIT
 #!/usr/bin/env python3
+
 """Keep-alive behavior regression test for the TinyWebServer HTTP layer.
 
 Usage:
