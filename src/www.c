@@ -18,12 +18,37 @@
 #include <sys/stat.h>
 #include <ctype.h> // For isdigit
 #include <getopt.h>
+#include <signal.h>
 
 // Include OpenSSL headers
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
 #include "client.h" 
+
+// --- N-B: global active-connection cap so slow-connect floods cannot
+//     exhaust file descriptors or worker threads. ---
+#define MAX_CONNECTIONS 1024
+static int g_active_connections = 0;
+static pthread_mutex_t g_conn_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void conn_count_dec(void *unused) {
+    (void)unused;
+    pthread_mutex_lock(&g_conn_lock);
+    if (g_active_connections > 0) g_active_connections--;
+    pthread_mutex_unlock(&g_conn_lock);
+}
+
+// Wrap handle_client so the connection counter is decremented on every
+// thread exit path, including the many pthread_exit() calls in client.c:
+// pthread_exit runs cleanup handlers registered via pthread_cleanup_push,
+// and the normal return path runs the handler via pthread_cleanup_pop(1).
+static void *handle_client_wrapper(void *arg) {
+    pthread_cleanup_push(conn_count_dec, NULL);
+    handle_client(arg);
+    pthread_cleanup_pop(1); // execute the handler on the normal path
+    return NULL;
+}
 
 // Global storage for all parsed SiteConfig structures
 // These are allocated once and pointed to by ListenSocket structures
@@ -373,6 +398,15 @@ SiteConfig *parse_site_file(const char *filepath, GlobalConfig *global_config) {
 
 // Function to read all site configurations from a directory
 // This function now populates the global_listeners structure
+// Graceful shutdown: set by SIGINT/SIGTERM; the main loop observes it and
+// falls through to the cleanup path at the end of main.
+static volatile sig_atomic_t g_stop_requested = 0;
+
+static void handle_shutdown_signal(int sig) {
+    (void)sig;
+    g_stop_requested = 1;
+}
+
 void read_all_site_configs(const char *sites_dir_path, GlobalConfig *global_config, GlobalListenConfig *global_listeners_ptr) {
     DIR *d;
     struct dirent *dir;
@@ -577,6 +611,14 @@ void free_site_config(SiteConfig *site) {
         }
         free(site->server_name);
     }
+    if (site->default_page != NULL) {
+        for (int i = 0; i < site->num_default_page; ++i) {
+            if (site->default_page[i] != NULL) {
+                free(site->default_page[i]);
+            }
+        }
+        free(site->default_page);
+    }
     if (site->ssl_ctx) {
         SSL_CTX_free(site->ssl_ctx);
     }
@@ -687,6 +729,10 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
+    // Register graceful shutdown handlers before anything else.
+    signal(SIGINT, handle_shutdown_signal);
+    signal(SIGTERM, handle_shutdown_signal);
+
     // Initialize OpenSSL library (should be done once at application startup)
     SSL_library_init();
     SSL_load_error_strings();
@@ -713,31 +759,6 @@ int main(int argc, char *argv[]) {
     if (current_global_listeners.count == 0) {
         fprintf(stderr, "No active listeners configured. Exiting.\n");
         return EXIT_FAILURE;
-    }
-
-    // --- Drop Privileges ---
-    if (global_config.specified && strlen(global_config.worker_user) > 0) {
-        struct passwd *pw = getpwnam(global_config.worker_user);
-        if (pw) {
-            if (setgid(pw->pw_gid) != 0) {
-                perror("setgid failed");
-                return EXIT_FAILURE;
-            }
-            if (setuid(pw->pw_uid) != 0) {
-                perror("setuid failed");
-                return EXIT_FAILURE;
-            }
-            printf("Dropped privileges to user '%s' (UID: %d, GID: %d)\n",
-                   global_config.worker_user, (int)pw->pw_uid, (int)pw->pw_gid);
-        } else {
-            fprintf(stderr, "Warning: Worker user '%s' not found. Running as current user.\n", global_config.worker_user);
-        }
-    } else {
-        // Fallback to nobody if no user specified or config not found
-        // Make sure nobody user exists (UID 65534 on many Linux systems)
-        if (setgid(65534) != 0) { perror("setgid failed for nobody"); /* not critical */ }
-        if (setuid(65534) != 0) { perror("setuid failed for nobody"); /* not critical */ }
-        printf("Dropped privileges to user 'nobody' (UID: 65534, GID: 65534) (fallback)\n");
     }
 
     // --- Create and Bind Sockets ---
@@ -830,6 +851,37 @@ int main(int argc, char *argv[]) {
         printf("--------------------------------------------------\n");
     }
 
+    // --- Drop Privileges (after binding low ports: root binds <1024 first,
+    //     then we drop to the worker user before entering the main loop) ---
+    if (global_config.specified && strlen(global_config.worker_user) > 0) {
+        struct passwd *pw = getpwnam(global_config.worker_user);
+        if (pw) {
+            if (setgid(pw->pw_gid) != 0) {
+                perror("setgid failed");
+                // Clean up before exiting so valgrind shows no definitely-lost blocks.
+                free(poll_fds);
+                free_global_listeners(&current_global_listeners);
+                return EXIT_FAILURE;
+            }
+            if (setuid(pw->pw_uid) != 0) {
+                perror("setuid failed");
+                free(poll_fds);
+                free_global_listeners(&current_global_listeners);
+                return EXIT_FAILURE;
+            }
+            printf("Dropped privileges to user '%s' (UID: %d, GID: %d)\n",
+                   global_config.worker_user, (int)pw->pw_uid, (int)pw->pw_gid);
+        } else {
+            fprintf(stderr, "Warning: Worker user '%s' not found. Running as current user.\n", global_config.worker_user);
+        }
+    } else {
+        // Fallback to nobody if no user specified or config not found
+        // Make sure nobody user exists (UID 65534 on many Linux systems)
+        if (setgid(65534) != 0) { perror("setgid failed for nobody"); /* not critical */ }
+        if (setuid(65534) != 0) { perror("setuid failed for nobody"); /* not critical */ }
+        printf("Dropped privileges to user 'nobody' (UID: 65534, GID: 65534) (fallback)\n");
+    }
+
     // Filter out failed sockets from poll_fds
     int active_listeners_count = 0;
     for(int i = 0; i < current_global_listeners.count; ++i) {
@@ -863,8 +915,15 @@ int main(int argc, char *argv[]) {
     while (1) {
         int poll_count = poll(poll_fds, active_listeners_count, -1); // Wait indefinitely
 
+        if (g_stop_requested) {
+            break; // Graceful shutdown requested via SIGINT/SIGTERM
+        }
+
         if (poll_count < 0) {
-            if (errno == EINTR) continue; // Interrupted by signal
+            if (errno == EINTR) {
+                if (g_stop_requested) break; // Interrupted by shutdown signal
+                continue; // Interrupted by unrelated signal
+            }
             perror("poll failed");
             break;
         }
@@ -882,6 +941,16 @@ int main(int argc, char *argv[]) {
                     perror("accept failed");
                     continue;
                 }
+
+                                // N-B: reject new connections once the cap is reached.
+                pthread_mutex_lock(&g_conn_lock);
+                if (g_active_connections >= MAX_CONNECTIONS) {
+                    pthread_mutex_unlock(&g_conn_lock);
+                    close(new_socket);
+                    continue;
+                }
+                g_active_connections++;
+                pthread_mutex_unlock(&g_conn_lock);
 
                 ClientThreadArgs *thread_args = malloc(sizeof(ClientThreadArgs));
                 if (thread_args == NULL) {
@@ -911,8 +980,11 @@ int main(int argc, char *argv[]) {
                 }
 
                 pthread_t client_thread;
-                if (pthread_create(&client_thread, NULL, handle_client, (void*) thread_args) < 0) {
+                if (pthread_create(&client_thread, NULL, handle_client_wrapper, (void*) thread_args) < 0) {
                     perror("could not create thread");
+                    pthread_mutex_lock(&g_conn_lock);
+                    if (g_active_connections > 0) g_active_connections--;
+                    pthread_mutex_unlock(&g_conn_lock);
                     close(new_socket);
                     free(thread_args);
                     continue;
@@ -936,6 +1008,7 @@ int main(int argc, char *argv[]) {
 
     free(poll_fds);
     free_global_listeners(&current_global_listeners); // Free all allocated memory (sites and listeners)
+    ReleaseRegexCache(); // Free cached PCRE2 regexes
     ERR_free_strings();
     EVP_cleanup();
     

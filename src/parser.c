@@ -66,6 +66,46 @@ char* URLDecode(const char* encoded_str) {
     return decoded_str;
 }
 
+/* PCRE2 compile-once cache.
+ * HANDLER_REGEX patterns are compiled lazily on first use and reused for
+ * every subsequent request, instead of being recompiled per request (L5).
+ * The index into the cache matches the index of handlers[]; the cache is
+ * released once at process exit via ReleaseRegexCache(). */
+#define MAX_HANDLERS 64
+static pcre2_code *regex_cache[MAX_HANDLERS];
+static int regex_cache_errorcode[MAX_HANDLERS];
+static PCRE2_SIZE regex_cache_erroroffset[MAX_HANDLERS];
+static bool regex_cache_done[MAX_HANDLERS];
+
+static pcre2_code *GetCachedRegex(int index, const char *pattern,
+                                  int *out_errorcode, PCRE2_SIZE *out_erroroffset) {
+    if (index < 0 || index >= MAX_HANDLERS) {
+        if (out_errorcode) *out_errorcode = PCRE2_ERROR_NOMEMORY;
+        if (out_erroroffset) *out_erroroffset = 0;
+        return NULL;
+    }
+    if (!regex_cache_done[index]) {
+        PCRE2_SPTR p = (PCRE2_SPTR)pattern;
+        regex_cache[index] = pcre2_compile(p, PCRE2_ZERO_TERMINATED, 0,
+                                           &regex_cache_errorcode[index],
+                                           &regex_cache_erroroffset[index], NULL);
+        regex_cache_done[index] = true;
+    }
+    if (out_errorcode) *out_errorcode = regex_cache_errorcode[index];
+    if (out_erroroffset) *out_erroroffset = regex_cache_erroroffset[index];
+    return regex_cache[index];
+}
+
+void ReleaseRegexCache(void) {
+    for (int i = 0; i < MAX_HANDLERS; i++) {
+        if (regex_cache[i] != NULL) {
+            pcre2_code_free(regex_cache[i]);
+            regex_cache[i] = NULL;
+        }
+        regex_cache_done[i] = false;
+    }
+}
+
 /* begin handler registrations */
 
 bool AlwaysTrueFunction(Request *req, char *path) {
@@ -158,9 +198,6 @@ void ParseQueryString(Request *req) {
             req->query[req->query_count].value = decoded_value; 
 
             
-            fprintf(stderr, "DEBUG: Query Param: Key='%s', Decoded Value='%s'\n",
-                    req->query[req->query_count].key,
-                    req->query[req->query_count].value ? req->query[req->query_count].value : "NULL");
 
 
             if (!req->query[req->query_count].key || !req->query[req->query_count].value) {
@@ -176,8 +213,6 @@ void ParseQueryString(Request *req) {
             // FIX: Ensure value is always a valid string, even if empty
             req->query[req->query_count].value = strdup("");
             
-            fprintf(stderr, "DEBUG: Query Param: Key='%s', Decoded Value='(empty)'\n",
-                    req->query[req->query_count].key);
 
             if (!req->query[req->query_count].key || !req->query[req->query_count].value) { // Check both key and value strdup
                 perror("strdup failed for query key (no value)");
@@ -332,9 +367,6 @@ void ParseFormData(Request *req) {
             req->form[req->form_length].value = decoded_value; 
 
             
-            fprintf(stderr, "DEBUG: Form Field: Key='%s', Decoded Value='%s'\n",
-                    req->form[req->form_length].key,
-                    req->form[req->form_length].value ? req->form[req->form_length].value : "NULL");
 
             if (!req->form[req->form_length].key || !req->form[req->form_length].value) {
                  perror("strdup or URLDecode failed for form key/value");
@@ -348,8 +380,6 @@ void ParseFormData(Request *req) {
             req->form[req->form_length].key = strdup(token);
             req->form[req->form_length].value = strdup(""); // FIX: Ensure value is always a valid string
             
-            fprintf(stderr, "DEBUG: Form Field: Key='%s', Decoded Value='(empty)'\n",
-                    req->form[req->form_length].key);
 
             if (!req->form[req->form_length].key || !req->form[req->form_length].value) { // Check both
                  perror("strdup failed for form key (no value)");
@@ -377,7 +407,7 @@ int PacketToRequestObject(char* request_buffer, size_t req_len, Request *req)
 	req->version = HTTP_1_1;
 	req->query_count = 0;
 	req->query = NULL;
-	req->accept = "*/*";
+	req->accept = strdup("*/*"); // strdup copy so free_request_members() can safely free it (default must be heap, not a literal, or malformed requests abort with free(): invalid pointer)
 	req->content_type = NULL;
 	req->content_length = 0;
 	req->cookie_count = 0;
@@ -501,7 +531,8 @@ int PacketToRequestObject(char* request_buffer, size_t req_len, Request *req)
                 req->content_length = strtol(header_value, NULL, 10);
 				req->body_len =req->content_length;
             } else if (strcasecmp(header_name, "Accept") == 0) {
-				// No need to free here
+				// Free the default "*/*" strdup from init before overwriting (else 4B/request leak)
+				if (req->accept) free(req->accept);
 				req->accept = strdup(header_value);
 			} else if (strcasecmp(header_name, "Cookie") == 0) {
                 ParseCookies(req, header_value);
@@ -764,7 +795,7 @@ void free_request_members(Request *req) {
     }
     if (req->host) free(req->host);
     if (req->user_agent) free(req->user_agent);
-    //if (req->accept) free(req->accept);
+    if (req->accept) free(req->accept);
     if (req->content_type) free(req->content_type);
     if (req->cookies) {
         for (int i = 0; i < req->cookie_count; ++i) {
@@ -787,6 +818,16 @@ void free_request_members(Request *req) {
             free(req->form[i].value); 
         }
         free(req->form);
+    }
+
+    // L1: server_info is a per-connection heap allocation (client.c malloc +
+    // strdup of server_ip/remote_ip). root_dir/default_page/server_name are
+    // borrowed pointers owned by SiteConfig and must NOT be freed here.
+    if (req->server_info) {
+        free(req->server_info->server_ip);
+        free(req->server_info->remote_ip);
+        free(req->server_info);
+        req->server_info = NULL;
     }
 }
 
@@ -825,7 +866,6 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], char
 	}
 
     
-    fprintf(stderr, "DEBUG: HandleRequest received - Total Length: %zu\n", req_len);
     /*
     fprintf(stderr, "DEBUG: HandleRequest received - Raw Request Buffer (Hex):\n");
     for (size_t k = 0; k < req_len; ++k) {
@@ -891,21 +931,22 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], char
         RequestHandler current_handler = NULL;
         Handler pre_match_handler;
 
-        printf("DEBUG: Begin Pre-Handler Check for path %s\n", req->path);
         for(int j=-1;j<req->server_info->num_default_page;j++)
         {
             char *new_path=(char*)malloc(PATH_MAX_LEN);
+            if (new_path == NULL) {
+                perror("malloc failed for new_path in HandleRequest");
+                break;
+            }
             if(j==-1)
             {
-                printf("DEBUG: Begin Trying %s\n", req->path);
                 free(new_path);
                 new_path=req->path;
             }
             else
             {
-                printf("DEBUG: Begin Trying %s\n", PathCombine(req->path,req->server_info->default_page[j]));                
                 size_t old_len = strlen(req->path);
-                if(req->path[old_len-1]=='/')
+                if (old_len > 0 && req->path[old_len-1] == '/')
                 {
                     int new_path_len = snprintf(new_path, PATH_MAX_LEN, "%s%s", req->path, req->server_info->default_page[j]);
                 }
@@ -917,7 +958,6 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], char
         
             for (int i = 0; handlers[i].metadata.path != NULL; i++)
             {
-                printf("DEBUG: Trying %s with \"%s\"\n", new_path, handlers[i].metadata.name);
                 switch(handlers[i].metadata.type)
                 {
                     case HANDLER_STATIC:
@@ -973,26 +1013,27 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], char
                     }
                     case HANDLER_REGEX:
                     {
-                        pcre2_code *re;
-                        PCRE2_SPTR pattern = (PCRE2_SPTR)handlers[i].metadata.path;
                         PCRE2_SPTR subject = (PCRE2_SPTR)new_path;
-                        int errorcode;
-                        PCRE2_SIZE erroroffset;
                         pcre2_match_data *match_data;
                         int rc;
+                        int errorcode;
+                        PCRE2_SIZE erroroffset;
 
-                        re = pcre2_compile(pattern, PCRE2_ZERO_TERMINATED, 0, &errorcode, &erroroffset, NULL);
+                        // Use the compile-once regex cache instead of recompiling
+                        // on every request. On compile failure report the real
+                        // errorcode (previously an uninitialized rc was passed).
+                        pcre2_code *re = GetCachedRegex(i, handlers[i].metadata.path,
+                                                        &errorcode, &erroroffset);
                         if (re == NULL) {
                             PCRE2_UCHAR buffer[256];
-                            pcre2_get_error_message(rc, buffer, sizeof(buffer));
-                            fprintf(stderr, "PCRE2 compilation failed at offset %lu: %s\n", erroroffset, buffer);
+                            pcre2_get_error_message(errorcode, buffer, sizeof(buffer));
+                            fprintf(stderr, "PCRE2 compilation failed at offset %lu: %s\n", (unsigned long)erroroffset, buffer);
                             break;
                         }
 
                         match_data = pcre2_match_data_create_from_pattern(re, NULL);
                         if (match_data == NULL) {
                             perror("PCRE2 match data creation failed");
-                            pcre2_code_free(re);
                             break;
                         }
 
@@ -1010,7 +1051,7 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], char
                         }
 
                         pcre2_match_data_free(match_data);
-                        pcre2_code_free(re);
+                        // Note: the compiled regex is cached and freed once in ReleaseRegexCache().
                         //printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
                         break;
                     }
@@ -1032,17 +1073,16 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], char
                 {
                     pre_match=pre_match_handler.check_page(req,req->server_info->default_page[j]);
                 }
-                printf("DEBUG: Pre-Handler check_page returned %s\n", pre_match ? "true" : "false");
             }
             if(pre_match)
             {
                  if(j==-1)
                 {
-                    printf("DEBUG: End Trying Successfully %s\n", req->path);
                 }
                 else
                 {
-                    printf("DEBUG: End Trying Successfully %s%s\n", req->path,req->server_info->default_page[j]);                    
+                    // N-A: take ownership of new_path; free the old req->path.
+                    free(req->path);
                     req->path=new_path;
                 }
                 break;
@@ -1051,11 +1091,12 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], char
             {
                 if(j==-1)
                 {
-                    printf("DEBUG: End Trying failed %s\n", req->path);
                 }
                 else
                 {
-                    printf("DEBUG: End Trying failed %s\n", PathCombine(req->path,req->server_info->default_page[j]));
+                    // N-A: no match on this default-page candidate; free the
+                    // PATH_MAX_LEN buffer allocated for this iteration.
+                    free(new_path);
                 }
             }
         }
@@ -1063,7 +1104,6 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], char
         {
             printf("Pre-Handler found for path %s with \"%s\"\n", req->path, current_handler_meta->name);
         }
-        printf("DEBUG: End Pre-Handler Check\n");
 
 		for (int i = 0; handlers[i].metadata.path != NULL; i++)
         {
@@ -1123,26 +1163,27 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], char
                 }
                 case HANDLER_REGEX:
                 {
-                    pcre2_code *re;
-                    PCRE2_SPTR pattern = (PCRE2_SPTR)handlers[i].metadata.path;
                     PCRE2_SPTR subject = (PCRE2_SPTR)req->path;
-                    int errorcode;
-                    PCRE2_SIZE erroroffset;
                     pcre2_match_data *match_data;
                     int rc;
+                    int errorcode;
+                    PCRE2_SIZE erroroffset;
 
-                    re = pcre2_compile(pattern, PCRE2_ZERO_TERMINATED, 0, &errorcode, &erroroffset, NULL);
+                    // Use the compile-once regex cache instead of recompiling
+                    // on every request. On compile failure report the real
+                    // errorcode (previously an uninitialized rc was passed).
+                    pcre2_code *re = GetCachedRegex(i, handlers[i].metadata.path,
+                                                    &errorcode, &erroroffset);
                     if (re == NULL) {
                         PCRE2_UCHAR buffer[256];
-                        pcre2_get_error_message(rc, buffer, sizeof(buffer));
-                        fprintf(stderr, "PCRE2 compilation failed at offset %lu: %s\n", erroroffset, buffer);
+                        pcre2_get_error_message(errorcode, buffer, sizeof(buffer));
+                        fprintf(stderr, "PCRE2 compilation failed at offset %lu: %s\n", (unsigned long)erroroffset, buffer);
                         break;
                     }
 
                     match_data = pcre2_match_data_create_from_pattern(re, NULL);
                     if (match_data == NULL) {
                         perror("PCRE2 match data creation failed");
-                        pcre2_code_free(re);
                         break;
                     }
 
@@ -1160,7 +1201,7 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], char
                     }
 
                     pcre2_match_data_free(match_data);
-                    pcre2_code_free(re);
+                    // Note: the compiled regex is cached and freed once in ReleaseRegexCache().
 					//printf("Handler %s matched for path %s\n", handlers[i].metadata.name, req->path);
                     break;
                 }
@@ -1179,14 +1220,16 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], char
             current_handler(req, resp);
         } else {
             // If no handler matched, return 404 Not Found
-            fprintf(stderr, "DEBUG: HandleRequest: No handler matched for path '%s'. Returning 404.\n", req->path ? req->path : "NULL");
             // FIX: Remove free() calls here. HandleRequest initializes and free_response_members cleans up.
             // if (resp->status_msg) free(resp->status_msg);
             // if (resp->content_type) free(resp->content_type);
             // if (resp->body) free(resp->body); // This one is fine as body is NULL initially
 
             resp->status_code = 404;
+            // L2: free the initial strdup'd "OK"/"text/html" before overwriting.
+            free(resp->status_msg);
             resp->status_msg = strdup("Not Found");
+            free(resp->content_type);
             resp->content_type = strdup("text/html");
             resp->body = strdup("<html><body><h1>404 Not Found</h1><p>The requested URL was not found on this server.</p></body></html>");
             resp->body_len = strlen(resp->body);
@@ -1199,8 +1242,10 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], char
 		// They are already strdup'd "OK" and "text/html" from initialization, so just update values.
 		// FIX: Remove free() calls here. HandleRequest initializes and free_response_members cleans up.
 		// free(resp->status_msg); // Free the default "OK"
+		free(resp->status_msg);
 		resp->status_msg = strdup("Bad Request");
 		// free(resp->content_type); // Free the default "text/html"
+		free(resp->content_type);
 		resp->content_type = strdup("text/html"); // Keep as text/html
 
 		resp->body_len = 0;
@@ -1213,7 +1258,9 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], char
 	size_t response_size = CACHE_SIZE; // Use CACHE_SIZE as initial buffer size
 	// Grow the buffer so the full body fits; prevents truncation and the
 	// Content-Length / body mismatch that would hang the client.
-	size_t header_budget = 1024; // fixed headers + typical custom headers
+	// Fixed headers + 128 bytes per cookie/header line so a large header set
+	// cannot truncate the response (ResponseObjectToPacket stops early).
+	size_t header_budget = 1024 + (resp->cookie_count + resp->header_count) * 128;
 	if (resp->body_len + header_budget > response_size) {
 		response_size = resp->body_len + header_budget;
 	}

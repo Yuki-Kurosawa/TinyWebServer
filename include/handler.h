@@ -232,8 +232,6 @@ inline static char* PathCombineExtend(char* left,char* right, int mode,char* mod
 	
 	//printf("DEBUG: %s %d\n","/",'/');
 
-	printf("DEBUG: PathCombine called with left: %s (%d,%d), right: %s (%d,%d)\n", left,left_has_slash,left[len_l - 1],
-		 temp_right,right_has_slash,temp_right[0]);
 
     if(len_r >0 && len_l >0)
     {
@@ -275,7 +273,6 @@ inline static char* PathCombineExtend(char* left,char* right, int mode,char* mod
 		free(buffer1);
 	}
 
-	printf("DEBUG: PathCombineExtend result: %s\n", buffer);
 	free(temp_right);
 	return buffer;
 }

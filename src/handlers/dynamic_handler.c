@@ -48,7 +48,6 @@ bool DynamicHandlerCheckPage(Request *req, char *path) {
     printf("DynamicHandlerCheckPage: Script Path: %s \n",file_to_serve1);
 
     char file_to_serve[PATH_MAX_LEN];
-    char dynamic_path_base[PATH_MAX_LEN]; 
 
     const char *original_path = file_to_serve1;
     char *last_slash = strrchr(original_path, '/');
@@ -74,12 +73,12 @@ bool DynamicHandlerCheckPage(Request *req, char *path) {
         strcpy(base_filename, filename_start);
     }
     
-    int snprintf_result = snprintf(file_to_serve, sizeof(dynamic_path_base), "%s%s%s.so",
+    int snprintf_result = snprintf(file_to_serve, sizeof(file_to_serve), "%s%s%s.so",
                                    directory_path, "lib", base_filename);
 
     struct stat file_stat;
 
-    printf("DynamicHandlerCheckPage: Library Path: %s \n",dynamic_path_base);
+    printf("DynamicHandlerCheckPage: Library Path: %s \n",file_to_serve);
     
     if (stat(file_to_serve, &file_stat) != 0 || !S_ISREG(file_stat.st_mode)) {
         return false;
@@ -93,7 +92,7 @@ bool DynamicHandlerCheckPage(Request *req, char *path) {
 
     void *handle=dlopen(file_to_serve, RTLD_LAZY);
     if(!handle){
-        printf("DynamicHandlerCheckPage: Library Load Failed: %s \n",dynamic_path_base);
+        printf("DynamicHandlerCheckPage: Library Load Failed: %s \n",file_to_serve);
         return false;
     }   
 

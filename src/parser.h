@@ -10,4 +10,7 @@
 
 void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], char **response_out, size_t *response_len_out);
 
+// Free all cached PCRE2 regexes (call once at process exit).
+void ReleaseRegexCache(void);
+
 #endif // PARSER_H

@@ -8,6 +8,23 @@
 
 #include "../common.h" 
 
+#include <stdarg.h>
+
+// N-E: append to a fixed-size buffer with hard clamping so body_len can never
+// exceed CACHE_SIZE. Previously a negative size_t underflow
+// (CACHE_SIZE - body_len with body_len > CACHE_SIZE) would overflow the heap buffer.
+static size_t info_append(char *buf, size_t cap, size_t len, const char *fmt, ...)
+{
+    if (len >= cap) return cap;
+    va_list ap;
+    va_start(ap, fmt);
+    int w = vsnprintf(buf + len, cap - len, fmt, ap);
+    va_end(ap);
+    if (w < 0) return len;
+    if ((size_t)w >= cap - len) return cap;
+    return len + (size_t)w;
+}
+
 
 void InfoProcessRequest(Request *req, Response *res)
 {	
@@ -19,9 +36,20 @@ void InfoProcessRequest(Request *req, Response *res)
 	printf("Processing request in InfoProcessRequest...\n");
 
 	char *html_body=(char*)malloc(CACHE_SIZE);
-	int body_len = 0;
+	if (html_body == NULL) {
+		perror("malloc failed for html_body in InfoProcessRequest");
+		res->status_code = 500;
+		if (res->status_msg) free(res->status_msg);
+		res->status_msg = strdup("Internal Server Error");
+		if (res->content_type) free(res->content_type);
+		res->content_type = strdup("text/html");
+		res->body = strdup("<html><body><h1>500 Internal Server Error</h1></body></html>");
+		res->body_len = strlen(res->body);
+		return;
+	}
+	size_t body_len = 0;
 
-	body_len+= snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<html>\n"
 		"<head>\n"
 		"<title>Server Info Page</title>\n"
@@ -49,15 +77,15 @@ void InfoProcessRequest(Request *req, Response *res)
 		"<p><strong>Request Method:</strong> %s</p>\n",
 		req->method == METHOD_GET ? "GET" : "POST");
 
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<p><strong>Request Path And Query:</strong> %s</p>\n",req->path_and_query ? req->path_and_query : ""
 	);
 
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<p><strong>Request Path:</strong> %s</p>\n",	
 		req->path);
 
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<p><strong>Site Root:</strong> %s</p>\n",
 		req->server_info->root_dir ? req->server_info->root_dir : "N/A");
 	
@@ -69,146 +97,146 @@ void InfoProcessRequest(Request *req, Response *res)
 		snprintf(file_path, sizeof(file_path), "N/A");
 	}
 	
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<p><strong>Handler File Path:</strong> %s</p>\n",
 		file_path); 
 
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<p><strong>Request Handler Name:</strong> %s</p>\n",
 		req->handler.name ? req->handler.name : "N/A");
 
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<p><strong>Request Handler Path:</strong> %s</p>\n",
 		req->handler.path ? req->handler.path : "N/A");
 
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<p><strong>Request Handler Type:</strong> %s</p>\n",
 		req->handler.type ? (req->handler.type==HANDLER_STATIC?"STATIC":
 		(req->handler.type==HANDLER_PREFIX?"PREFIX":
 		(req->handler.type==HANDLER_SUFFIX?"SUFFIX":"REGEX"))) : "N/A");
 
 
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<p><strong>Query String:</strong> %s</p>\n",
 		req->query_string ? req->query_string : "N/A");
 
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<p><strong>Query Count:</strong> %d</p>\n",
 		req->query_count);
 
 	if (req->query_count > 0) {
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<table><thead><tr><th>#</th><th>Key</th><th>Value</th></tr></thead><tbody>\n");
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "<table><thead><tr><th>#</th><th>Key</th><th>Value</th></tr></thead><tbody>\n");
 		for (int i = 0; i < req->query_count; i++) {
-			body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+			body_len = info_append(html_body, CACHE_SIZE, body_len,
 				"<tr><td>%d</td><td>%s</td><td>%s</td></tr>\n",
 				i + 1,
 				req->query[i].key ? req->query[i].key : "N/A",
 				req->query[i].value ? req->query[i].value : "N/A");
 		}
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "</tbody></table>\n");
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "</tbody></table>\n");
 	} else {
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<p>No query parameters.</p>\n");
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "<p>No query parameters.</p>\n");
 	}
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "</div>\n"); // End Request Details section
+	body_len = info_append(html_body, CACHE_SIZE, body_len, "</div>\n"); // End Request Details section
 
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<div class=\"section\">\n<h2>HTTP Headers</h2>\n");
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len, "<div class=\"section\">\n<h2>HTTP Headers</h2>\n");
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<p><strong>Host:</strong> %s</p>\n",
 		req->host ? req->host : "N/A");
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<p><strong>User-Agent:</strong> %s</p>\n",
 		req->user_agent ? req->user_agent : "N/A");
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<p><strong>Accept:</strong> %s</p>\n",
 		req->accept ? req->accept : "*/*");
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<p><strong>Content-Type:</strong> %s</p>\n",
 		req->content_type ? req->content_type : "N/A");
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<p><strong>Content-Length:</strong> %zu</p>\n",
 		req->content_length);
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<p><strong>Body Length:</strong> %zu</p>\n",
 		req->body_len);
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<p><strong>Body:</strong> %s</p>\n",
 		req->body ? req->body : "N/A");
 	
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<p><strong>Form Data Count:</strong> %d</p>\n",
 		req->form_length);
 	if (req->form_length > 0) {
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<table><thead><tr><th>#</th><th>Key</th><th>Value</th></tr></thead><tbody>\n");
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "<table><thead><tr><th>#</th><th>Key</th><th>Value</th></tr></thead><tbody>\n");
 		for (int i = 0; i < req->form_length; i++) {
-			body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+			body_len = info_append(html_body, CACHE_SIZE, body_len,
 				"<tr><td>%d</td><td>%s</td><td>%s</td></tr>\n",
 				i + 1,
 				req->form[i].key ? req->form[i].key : "N/A",
 				req->form[i].value ? req->form[i].value : "N/A");
 		}
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "</tbody></table>\n");
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "</tbody></table>\n");
 	} else {
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<p>No form data.</p>\n");
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "<p>No form data.</p>\n");
 	}
 
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<p><strong>Other Header Count:</strong> %d</p>\n",
 		req->header_count);
 	if (req->header_count > 0) {
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<table><thead><tr><th>#</th><th>Key</th><th>Value</th></tr></thead><tbody>\n");
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "<table><thead><tr><th>#</th><th>Key</th><th>Value</th></tr></thead><tbody>\n");
 		for (int i = 0; i < req->header_count; i++) {
-			body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+			body_len = info_append(html_body, CACHE_SIZE, body_len,
 				"<tr><td>%d</td><td>%s</td><td>%s</td></tr>\n",
 				i + 1,
 				req->headers[i].key ? req->headers[i].key : "N/A",
 				req->headers[i].value ? req->headers[i].value : "N/A");
 		}
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "</tbody></table>\n");
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "</tbody></table>\n");
 	} else {
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<p>No other headers.</p>\n");
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "<p>No other headers.</p>\n");
 	}
 
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"<p><strong>Cookie Count:</strong> %d</p>\n",
 		req->cookie_count);
 	if (req->cookie_count > 0) {
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<table><thead><tr><th>#</th><th>Key</th><th>Value</th></tr></thead><tbody>\n");
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "<table><thead><tr><th>#</th><th>Key</th><th>Value</th></tr></thead><tbody>\n");
 		for (int i = 0; i < req->cookie_count; i++) {
-			body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+			body_len = info_append(html_body, CACHE_SIZE, body_len,
 				"<tr><td>%d</td><td>%s</td><td>%s</td></tr>\n",
 				i + 1,
 				req->cookies[i].key ? req->cookies[i].key : "N/A",
 				req->cookies[i].value ? req->cookies[i].value : "N/A");
 		}
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "</tbody></table>\n");
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "</tbody></table>\n");
 	} else {
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<p>No cookies.</p>\n");
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "<p>No cookies.</p>\n");
 	}
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "</div>\n"); // End HTTP Headers section
+	body_len = info_append(html_body, CACHE_SIZE, body_len, "</div>\n"); // End HTTP Headers section
 
 
 	//--- NEW: Display Server Context Data from ServerInfo ---
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<div class=\"section\">\n<h2>Server Info</h2>\n");
+	body_len = info_append(html_body, CACHE_SIZE, body_len, "<div class=\"section\">\n<h2>Server Info</h2>\n");
 	if (req->server_info != NULL) {
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<p><strong>Server IP:</strong> %s</p>\n",
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "<p><strong>Server IP:</strong> %s</p>\n",
 			req->server_info->server_ip ? req->server_info->server_ip : "N/A");
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<p><strong>Server Port:</strong> %d</p>\n",
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "<p><strong>Server Port:</strong> %d</p>\n",
 			req->server_info->server_port);
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<p><strong>Remote IP:</strong> %s</p>\n",
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "<p><strong>Remote IP:</strong> %s</p>\n",
 			req->server_info->remote_ip ? req->server_info->remote_ip : "N/A");
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<p><strong>Remote Port:</strong> %d</p>\n",
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "<p><strong>Remote Port:</strong> %d</p>\n",
 			req->server_info->remote_port);
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<p><strong>Site Root:</strong> %s</p>\n",
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "<p><strong>Site Root:</strong> %s</p>\n",
 			req->server_info->root_dir ? req->server_info->root_dir : "N/A");
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<p><strong>Default Pages:</strong></p>\n");
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "<p><strong>Default Pages:</strong></p>\n");
 		for (int i = 0; i < req->server_info->num_default_page; i++) {
-			body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "%s%s",
+			body_len = info_append(html_body, CACHE_SIZE, body_len, "%s%s",
 				req->server_info->default_page[i],
 				(i < req->server_info->num_default_page - 1) ? ", " : "");
 		}
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<p><strong>Server Names:</strong></p>\n");
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "<p><strong>Server Names:</strong></p>\n");
 		for (int i = 0; i < req->server_info->num_server_names; i++) {
-			body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "%s%s",
+			body_len = info_append(html_body, CACHE_SIZE, body_len, "%s%s",
 				req->server_info->server_name[i],
 				(i < req->server_info->num_server_names - 1) ? ", " : "");
 		}
@@ -217,14 +245,14 @@ void InfoProcessRequest(Request *req, Response *res)
 		// For this version, we're only reflecting what's in ServerInfo struct.
 
 	} else {
-		body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "<p class=\"warning\">No server context data available.</p>\n");
+		body_len = info_append(html_body, CACHE_SIZE, body_len, "<p class=\"warning\">No server context data available.</p>\n");
 	}
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len, "</div>\n"); // End Server Context section
+	body_len = info_append(html_body, CACHE_SIZE, body_len, "</div>\n"); // End Server Context section
 	// --- END NEW ---
 
 
 		
-	body_len += snprintf(html_body + body_len, CACHE_SIZE - body_len,
+	body_len = info_append(html_body, CACHE_SIZE, body_len,
 		"</body>\n"
 		"</html>\n");
 		

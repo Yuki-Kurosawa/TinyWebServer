@@ -19,9 +19,17 @@ bool StaticFileCheckPage(Request *req, char *path) {
         return false;
     }
 
-    char* file_to_serve;    
-    
-    file_to_serve=PathCombine(PathCombine(req->server_info->root_dir, normalized),path);
+    // N-A: PathCombine allocates a fresh string on every call; free each
+    // intermediate result instead of leaking both per handler check.
+    char *combined = PathCombine(req->server_info->root_dir, normalized);
+    if (combined == NULL) {
+        return false;
+    }
+    char *file_to_serve = PathCombine(combined, path);
+    free(combined);
+    if (file_to_serve == NULL) {
+        return false;
+    }
     printf("StaticFileCheckPage: Checking existence of file '%s'\n", file_to_serve);
 
     struct stat path_stat;
@@ -29,7 +37,7 @@ bool StaticFileCheckPage(Request *req, char *path) {
     if (stat(file_to_serve, &path_stat) == 0) {
         
         if (S_ISDIR(path_stat.st_mode)) {
-            printf("DEBUG: StaticFileCheckPage: '%s' is a directory\n", req->path);
+            free(file_to_serve);
             return false; 
         }
     }
@@ -37,8 +45,12 @@ bool StaticFileCheckPage(Request *req, char *path) {
     FILE* fp=fopen(file_to_serve,"r");
     if(fp==NULL){
         printf("StaticFileCheckPage: Failed to open file '%s'\n", file_to_serve);
+        free(file_to_serve);
         return false;
     }
+    // Only check readability; close immediately so the FILE* is not leaked.
+    fclose(fp);
+    free(file_to_serve);
     return true;
 }
 
@@ -108,6 +120,7 @@ void StaticFileProcessRequest(Request *req, Response *res) {
         
         fprintf(stderr, "StaticFileProcessRequest: stat('%s') failed. errno: %d (%s)\n", file_to_serve, errno, strerror(errno));
         
+        free(file_to_serve);
         if (res->body) free(res->body);
 
         res->status_code = 404;
@@ -189,6 +202,7 @@ void StaticFileProcessRequest(Request *req, Response *res) {
     if (file == NULL) {
         fprintf(stderr, "StaticFileProcessRequest: fopen('%s') failed. errno: %d (%s)\n", file_to_serve, errno, strerror(errno));
         
+        free(file_to_serve);
         if (res->body) free(res->body);
 
         res->status_code = 500;
@@ -210,6 +224,7 @@ void StaticFileProcessRequest(Request *req, Response *res) {
         fprintf(stderr, "StaticFileProcessRequest: file '%s' size %ld exceeds limit %d, refusing to buffer.\n",
                 file_to_serve, file_size, MAX_STATIC_FILE_SIZE);
         fclose(file);
+        free(file_to_serve);
         if (res->status_msg) free(res->status_msg);
         if (res->content_type) free(res->content_type);
         if (res->body) free(res->body);
@@ -231,6 +246,7 @@ void StaticFileProcessRequest(Request *req, Response *res) {
     if (res->body == NULL) {
         perror("StaticFileProcessRequest: malloc failed for response body");
         fclose(file);
+        free(file_to_serve);
         
         if (res->status_msg) free(res->status_msg);
         res->status_msg = strdup("Internal Server Error");
@@ -249,6 +265,7 @@ void StaticFileProcessRequest(Request *req, Response *res) {
         free(res->body); 
         res->body = NULL;
         fclose(file);
+        free(file_to_serve);
         
         if (res->status_msg) free(res->status_msg);
         res->status_msg = strdup("Internal Server Error");
@@ -274,4 +291,5 @@ void StaticFileProcessRequest(Request *req, Response *res) {
 
     fprintf(stderr, "StaticFileProcessRequest: Successfully served '%s'. Content-Type: %s, Length: %zu\n",
             file_to_serve, res->content_type, res->body_len);
+    free(file_to_serve);
 }

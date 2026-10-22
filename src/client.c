@@ -5,16 +5,33 @@
 #include <stdio.h>
 #include <stdlib.h> // For malloc, free, perror
 #include <string.h> // For memset, strlen, strstr, strchr, strncpy, strcmp, strcpy
+#include <strings.h> // For strncasecmp (case-insensitive, POSIX)
 #include <unistd.h> // For close, read, write
 #include <pthread.h> // For pthread_exit
 #include <errno.h>        // For errno
 #include <fcntl.h>        // For fcntl (setting non-blocking) - though select is used for timeout
 #include <sys/time.h>     // For struct timeval
 #include <openssl/err.h>  // For SSL_get_error and ERR_print_errors_fp
+#include <limits.h>        // For INT_MAX (write_all chunking)
 #include <arpa/inet.h>    // For inet_ntop
 #include <netinet/in.h>   // For sockaddr_in, sockaddr_in6
 #include <sys/socket.h>   // For getsockname, setsockopt, SOL_SOCKET, SO_RCVTIMEO
 
+
+// Case-insensitive substring search. HTTP header field names are
+// case-insensitive per RFC 9110, so we cannot rely on exact-case strstr()
+// to locate e.g. the Host header (a client may send "host:").
+static char *FindCaseInsensitive(const char *haystack, const char *needle) {
+    if (!haystack || !needle) return NULL;
+    size_t nlen = strlen(needle);
+    if (nlen == 0) return (char *)haystack;
+    for (const char *p = haystack; *p != '\0'; p++) {
+        if (strncasecmp(p, needle, nlen) == 0) {
+            return (char *)p;
+        }
+    }
+    return NULL;
+}
 
 // Function to find a site based on hostname
 // This will be used by both SNI callback and HTTP Host header parsing
@@ -63,6 +80,58 @@ int sni_callback(SSL *ssl, int *ad, void *arg) {
     return SSL_TLSEXT_ERR_NOACK; // Let OpenSSL use the default context
 }
 
+
+
+// Write the entire buffer to the peer, retrying partial writes and
+// EINTR/EAGAIN. On plain sockets a blocking write loops until everything
+// is flushed (or the peer closes -> error). With SO_SNDTIMEO (5s) a stalled
+// client surfaces as EAGAIN; we retry a bounded number of times so a
+// permanently stalled peer cannot pin a worker thread forever.
+// Returns 0 on full success, -1 on failure.
+static int write_all(int sock, SSL *ssl, const char *buf, size_t len) {
+    size_t off = 0;
+    int stall_count = 0; // consecutive EAGAIN/WANT_* attempts
+    while (off < len) {
+        size_t remain = len - off;
+        int chunk = (remain > (size_t)INT_MAX) ? INT_MAX : (int)remain;
+        if (ssl) {
+            int n = SSL_write(ssl, buf + off, chunk);
+            if (n > 0) { off += (size_t)n; stall_count = 0; continue; }
+            int err = SSL_get_error(ssl, n);
+            if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+                if (++stall_count > 3) {
+                    fprintf(stderr, "SSL_write stalled for socket %d.\n", sock);
+                    return -1;
+                }
+                usleep(1000); // 1ms backoff, bounded
+                continue;
+            }
+            if (err == SSL_ERROR_SYSCALL && errno == EINTR) continue;
+            ERR_print_errors_fp(stderr);
+            fprintf(stderr, "SSL_write error for socket %d.\n", sock);
+            return -1;
+        } else {
+            ssize_t n = write(sock, buf + off, (size_t)chunk);
+            if (n > 0) { off += (size_t)n; stall_count = 0; continue; }
+            if (n < 0) {
+                if (errno == EINTR) continue;
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    if (++stall_count > 3) {
+                        perror("write stalled (send timeout)");
+                        return -1;
+                    }
+                    usleep(1000);
+                    continue;
+                }
+                perror("write error");
+                return -1;
+            }
+            fprintf(stderr, "write returned 0 for socket %d.\n", sock);
+            return -1;
+        }
+    }
+    return 0;
+}
 
 // Function to handle a single client connection
 void *handle_client(void *thread_args_ptr) {
@@ -201,7 +270,7 @@ void *handle_client(void *thread_args_ptr) {
     }
 
     // --- Determine Active Site based on Host header (HTTP and HTTPS after handshake) ---
-    char *host_header_start = strstr(request_buffer, "\r\nHost: ");
+    char *host_header_start = FindCaseInsensitive(request_buffer, "\r\nHost: ");
     char hostname[MAX_LINE_SIZE] = {0};
     if (host_header_start) {
         host_header_start += strlen("\r\nHost: ");
@@ -234,8 +303,7 @@ void *handle_client(void *thread_args_ptr) {
     } else if (active_site == NULL) {
         fprintf(stderr, "Error: No site configured for this listener! Cannot serve request on socket %d.\n", sock);
         const char* error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nNo site configured for this port.";
-        if (use_ssl) SSL_write(ssl, error_response, strlen(error_response));
-        else write(sock, error_response, strlen(error_response));
+        write_all(sock, ssl, error_response, strlen(error_response));
         if (use_ssl) SSL_free(ssl);
         close(sock);
         free(request_buffer); // Clean up
@@ -249,8 +317,7 @@ void *handle_client(void *thread_args_ptr) {
         perror("malloc failed for ServerInfo in client.c");
         // Handle error, send 500 or exit thread
         const char* error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nServer out of memory.";
-        if (use_ssl) SSL_write(ssl, error_response, strlen(error_response));
-        else write(sock, error_response, strlen(error_response));
+        write_all(sock, ssl, error_response, strlen(error_response));
         if (use_ssl) SSL_free(ssl);
         close(sock);
         free(request_buffer); // Clean up
@@ -280,8 +347,7 @@ void *handle_client(void *thread_args_ptr) {
             perror("strdup failed for server_ip in client.c");
             // Handle error, send 500 or exit thread
             const char* error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nServer out of memory.";
-            if (use_ssl) SSL_write(ssl, error_response, strlen(error_response));
-            else write(sock, error_response, strlen(error_response));
+            write_all(sock, ssl, error_response, strlen(error_response));
             if (use_ssl) SSL_free(ssl);
             close(sock);
             free(request_buffer);
@@ -297,8 +363,7 @@ void *handle_client(void *thread_args_ptr) {
             perror("strdup failed for server_ip N/A in client.c");
             // Handle error, send 500 or exit thread
             const char* error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nServer out of memory.";
-            if (use_ssl) SSL_write(ssl, error_response, strlen(error_response));
-            else write(sock, error_response, strlen(error_response));
+            write_all(sock, ssl, error_response, strlen(error_response));
             if (use_ssl) SSL_free(ssl);
             close(sock);
             free(request_buffer);
@@ -326,8 +391,7 @@ void *handle_client(void *thread_args_ptr) {
             perror("strdup failed for remote_ip in client.c");
             // Handle error, send 500 or exit thread
             const char* error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nServer out of memory.";
-            if (use_ssl) SSL_write(ssl, error_response, strlen(error_response));
-            else write(sock, error_response, strlen(error_response));
+            write_all(sock, ssl, error_response, strlen(error_response));
             if (use_ssl) SSL_free(ssl);
             close(sock);
             free(request_buffer);
@@ -343,8 +407,7 @@ void *handle_client(void *thread_args_ptr) {
             perror("strdup failed for remote_ip N/A in client.c");
             // Handle error, send 500 or exit thread
             const char* error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nServer out of memory.";
-            if (use_ssl) SSL_write(ssl, error_response, strlen(error_response));
-            else write(sock, error_response, strlen(error_response));
+            write_all(sock, ssl, error_response, strlen(error_response));
             if (use_ssl) SSL_free(ssl);
             close(sock);
             free(request_buffer);
@@ -368,19 +431,13 @@ void *handle_client(void *thread_args_ptr) {
     HandleRequest(server_info, total_bytes_received, request_buffer,
                 &response_buffer, &actual_response_len);
 
-    // server_info and its strdup'd members are freed by free_request_members in parser.c
+    // server_info (with strdup'd server_ip/remote_ip) is freed by free_request_members
+    // in parser.c; root_dir/default_page/server_name stay owned by SiteConfig.
     // response_buffer is allocated on demand inside HandleRequest and freed below.
 
-    if (use_ssl) {
-        if (SSL_write(ssl, response_buffer, actual_response_len) <= 0) {
-            ERR_print_errors_fp(stderr);
-            fprintf(stderr, "SSL_write error for socket %d.\\n", sock);
+    if (write_all(sock, ssl, response_buffer, actual_response_len) < 0) {
+            fprintf(stderr, "Response write failed for socket %d.\n", sock);
         }
-    } else {
-        if (write(sock, response_buffer, actual_response_len) <= 0) {
-            perror("write error");
-        }
-    }
 
     // --- Shutdown and Cleanup ---
     if (use_ssl) {
