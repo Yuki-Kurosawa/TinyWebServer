@@ -96,6 +96,14 @@ void *handle_client(void *thread_args_ptr) {
     size_t actual_response_len = 0; // This will be filled by HandleRequest
 
 
+    // --- Set socket timeouts BEFORE the TLS handshake so a slow or stalled
+    //     handshake cannot pin a worker thread forever (H2). ---
+    struct timeval timeout;
+    timeout.tv_sec = 5;  // 5 second timeout
+    timeout.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof timeout);
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout, sizeof timeout);
+
     // --- PERFORM SSL HANDSHAKE IMMEDIATELY IF SSL IS ENABLED ---
     if (use_ssl) {
         // Use the listener's SSL_CTX for the initial handshake.
@@ -130,12 +138,7 @@ void *handle_client(void *thread_args_ptr) {
     // --- Read the HTTP Request (using SSL_read or read) ---
     ssize_t bytes_received = 0;
     ssize_t total_bytes_received = 0;
-
-    // Set a receive timeout to prevent blocking indefinitely
-    struct timeval timeout;
-    timeout.tv_sec = 5;  // 5 second timeout
-    timeout.tv_usec = 0;
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof timeout);
+    // Note: SO_RCVTIMEO/SO_SNDTIMEO were already set before the TLS handshake.
 
     while (total_bytes_received < MAX_REQUEST_SIZE - 1) {
         if (use_ssl) {
@@ -148,13 +151,20 @@ void *handle_client(void *thread_args_ptr) {
             if (use_ssl) {
                 int ssl_err = SSL_get_error(ssl, bytes_received);
                 if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
-                    continue; // Non-blocking SSL_read, data not ready yet
+                    // Blocking socket with SO_RCVTIMEO: this normally indicates the
+                    // receive timed out. Bail out instead of busy-looping forever.
+                    fprintf(stderr, "SSL read timeout for socket %d.\n", sock);
+                    break;
                 }
                 fprintf(stderr, "SSL_read error for socket %d, error: %d\n", sock, ssl_err);
                 ERR_print_errors_fp(stderr);
             } else {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    continue; // Non-blocking read, data not ready yet
+                    // Blocking socket with SO_RCVTIMEO: Linux reports the receive
+                    // timeout as EAGAIN (not ETIMEDOUT). Treat it as a timeout and
+                    // stop reading, otherwise the thread busy-loops forever.
+                    fprintf(stderr, "Read timeout for socket %d.\n", sock);
+                    break;
                 }
                 if (errno == ETIMEDOUT) { // Handle read timeout
                     fprintf(stderr, "Read timeout for socket %d.\n", sock);
@@ -197,8 +207,14 @@ void *handle_client(void *thread_args_ptr) {
         host_header_start += strlen("\r\nHost: ");
         char *host_header_end = strchr(host_header_start, '\r');
         if (host_header_end) {
-            strncpy(hostname, host_header_start, host_header_end - host_header_start);
-            hostname[host_header_end - host_header_start] = '\0';
+            size_t host_len = (size_t)(host_header_end - host_header_start);
+            // Clamp to the destination buffer to avoid a stack out-of-bounds write
+            // when the Host header value is >= MAX_LINE_SIZE.
+            if (host_len >= MAX_LINE_SIZE) {
+                host_len = MAX_LINE_SIZE - 1;
+            }
+            memcpy(hostname, host_header_start, host_len);
+            hostname[host_len] = '\0';
         }
     }
 

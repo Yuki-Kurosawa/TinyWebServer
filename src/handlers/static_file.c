@@ -204,6 +204,23 @@ void StaticFileProcessRequest(Request *req, Response *res) {
     
     long file_size = file_stat.st_size;
 
+    // M2: cap the size of files buffered fully in memory. Oversized files are
+    // rejected with 413 instead of exhausting the server's memory.
+    if (file_size < 0 || file_size > (long)MAX_STATIC_FILE_SIZE) {
+        fprintf(stderr, "StaticFileProcessRequest: file '%s' size %ld exceeds limit %d, refusing to buffer.\n",
+                file_to_serve, file_size, MAX_STATIC_FILE_SIZE);
+        fclose(file);
+        if (res->status_msg) free(res->status_msg);
+        if (res->content_type) free(res->content_type);
+        if (res->body) free(res->body);
+        res->status_code = 413;
+        res->status_msg = strdup("Content Too Large");
+        res->content_type = strdup("text/html");
+        res->body = strdup("<html><body><h1>413 Content Too Large</h1><p>The requested file is too large to serve.</p></body></html>");
+        res->body_len = strlen(res->body);
+        return;
+    }
+
     
     
     if (res->body) {

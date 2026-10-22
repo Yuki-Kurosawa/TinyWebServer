@@ -16,6 +16,24 @@
 
 #define PATH_MAX_LEN 4096 
 
+// H4: A shared library may only be loaded from inside the site's root
+// directory. Code execution inside the site directory is accepted by design;
+// escaping the root is not.
+static bool IsWithinRootDir(const char *root_dir, const char *path) {
+    if (root_dir == NULL || path == NULL) return false;
+    char real_root[PATH_MAX_LEN];
+    char real_path[PATH_MAX_LEN];
+    if (realpath(root_dir, real_root) == NULL) return false;
+    if (realpath(path, real_path) == NULL) return false;
+
+    size_t rl = strlen(real_root);
+    while (rl > 1 && real_root[rl - 1] == '/') {
+        real_root[--rl] = '\0';
+    }
+    if (strncmp(real_path, real_root, rl) != 0) return false;
+    return real_path[rl] == '\0' || real_path[rl] == '/';
+}
+
 bool DynamicHandlerCheckPage(Request *req, char *path) {
     char normalized[PATH_MAX_LEN];
     if (NormalizeRequestPath(req->path, normalized, sizeof(normalized)) != 0) {
@@ -66,6 +84,12 @@ bool DynamicHandlerCheckPage(Request *req, char *path) {
     if (stat(file_to_serve, &file_stat) != 0 || !S_ISREG(file_stat.st_mode)) {
         return false;
     }    
+
+    // H4: refuse libraries that escape the site's root directory.
+    if (!IsWithinRootDir(req->server_info->root_dir, file_to_serve)) {
+        printf("DynamicHandlerCheckPage: Refusing library outside root_dir: %s \n", file_to_serve);
+        return false;
+    }
 
     void *handle=dlopen(file_to_serve, RTLD_LAZY);
     if(!handle){
@@ -249,6 +273,20 @@ void DynamicHandlerProcessRequest(Request *req, Response *res) {
     }
 
     
+    // H4: refuse libraries that escape the site's root directory.
+    if (!IsWithinRootDir(req->server_info->root_dir, file_to_serve)) {
+        fprintf(stderr, "DynamicHandlerProcessRequest: Refusing library outside root_dir: '%s'\n", file_to_serve);
+        if (res->status_msg) free(res->status_msg);
+        if (res->content_type) free(res->content_type);
+        if (res->body) free(res->body);
+        res->status_code = 403;
+        res->status_msg = strdup("Forbidden");
+        res->content_type = strdup("text/html");
+        res->body = strdup("<html><body><h1>403 Forbidden</h1><p>Dynamic script outside site root.</p></body></html>");
+        res->body_len = strlen(res->body);
+        return;
+    }
+
     void *handle = dlopen(file_to_serve, RTLD_LAZY);
     if (!handle) {
         fprintf(stderr, "DynamicHandlerProcessRequest: Failed to open shared library '%s': %s\n", file_to_serve, dlerror());

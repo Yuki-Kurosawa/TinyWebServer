@@ -16,6 +16,8 @@
 #define SERVER_MOTD_TO_CLIENT "YukiWebServer/" YUKI_VERSION_STR
 #define CACHE_SIZE 131072 // 128KiB initial response buffer (grown on demand)
 
+#define MAX_STATIC_FILE_SIZE (64 * 1024 * 1024) // 64MiB hard cap for static files buffered fully in memory (M2)
+
 #define PATH_MAX_LEN 4096 
 
 #define XSTR(x) #x
