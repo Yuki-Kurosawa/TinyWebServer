@@ -17,21 +17,12 @@
 #include <netinet/in.h>   // For sockaddr_in, sockaddr_in6
 #include <sys/socket.h>   // For getsockname, setsockopt, SOL_SOCKET, SO_RCVTIMEO
 
+// How long an idle keep-alive connection is kept before it is closed (s).
+// The initial read / TLS handshake uses the shorter 5s socket timeout; once a
+// response is sent and the connection will persist, the read timeout is
+// re-armed to this value so an idle client cannot pin a worker thread forever.
+#define KEEP_ALIVE_IDLE_SEC 30
 
-// Case-insensitive substring search. HTTP header field names are
-// case-insensitive per RFC 9110, so we cannot rely on exact-case strstr()
-// to locate e.g. the Host header (a client may send "host:").
-static char *FindCaseInsensitive(const char *haystack, const char *needle) {
-    if (!haystack || !needle) return NULL;
-    size_t nlen = strlen(needle);
-    if (nlen == 0) return (char *)haystack;
-    for (const char *p = haystack; *p != '\0'; p++) {
-        if (strncasecmp(p, needle, nlen) == 0) {
-            return (char *)p;
-        }
-    }
-    return NULL;
-}
 
 // Function to find a site based on hostname
 // This will be used by both SNI callback and HTTP Host header parsing
@@ -133,6 +124,219 @@ static int write_all(int sock, SSL *ssl, const char *buf, size_t len) {
     return 0;
 }
 
+// ---- HTTP keep-alive connection helpers ----
+
+// Locate the end-of-headers marker "\r\n\r\n" within [buf, buf+len).
+// Returns a pointer to the marker or NULL if not present.
+static char *find_header_terminator(char *buf, size_t len) {
+    if (len < 4) return NULL;
+    for (size_t i = 0; i + 3 < len; i++) {
+        if (buf[i] == '\r' && buf[i+1] == '\n' &&
+            buf[i+2] == '\r' && buf[i+3] == '\n')
+            return buf + i;
+    }
+    return NULL;
+}
+
+// Find the value of a header field within a header block (case-insensitive).
+// Leading/trailing whitespace is trimmed; *value_len is the value length and
+// the returned pointer points at the first value character. Returns NULL if
+// the field is absent. Every header line (including the first) is preceded by
+// "\r\n" after the request line, so scanning for "\r\n" + field + ":" covers
+// all of them. The header block need not be NUL-terminated (bounded by hdr_len).
+static const char *find_header_value(const char *hdr, size_t hdr_len,
+                                     const char *field, size_t *value_len) {
+    size_t flen = strlen(field);
+    size_t needle_len = 2 + flen + 1; // "\r\n" + field + ":"
+    if (needle_len > hdr_len) return NULL;
+    for (size_t i = 0; i + needle_len <= hdr_len; i++) {
+        if (hdr[i] == '\r' && hdr[i+1] == '\n' &&
+            strncasecmp(hdr + i + 2, field, flen) == 0 &&
+            hdr[i + 2 + flen] == ':') {
+            const char *v = hdr + i + needle_len;
+            const char *e = hdr + hdr_len;
+            while (v < e && (*v == ' ' || *v == '\t')) v++;
+            const char *vend = v;
+            while (vend < e && *vend != '\r' && *vend != '\n') vend++;
+            *value_len = (size_t)(vend - v);
+            return v;
+        }
+    }
+    return NULL;
+}
+
+// Parse Content-Length from a header block. Returns 0 on success (with *out
+// set), or -1 if the header is absent or malformed (caller treats as "no body").
+static int header_content_length(const char *hdr, size_t hdr_len, size_t *out) {
+    size_t vlen = 0;
+    const char *v = find_header_value(hdr, hdr_len, "Content-Length", &vlen);
+    if (!v) return -1;
+    char tmp[32];
+    if (vlen >= sizeof(tmp)) vlen = sizeof(tmp) - 1;
+    memcpy(tmp, v, vlen); tmp[vlen] = '\0';
+    char *endp = NULL;
+    unsigned long n = strtoul(tmp, &endp, 10);
+    if (endp == tmp) return -1;
+    *out = (size_t)n;
+    return 0;
+}
+
+// Read from the socket until at least `need` bytes are buffered, growing the
+// buffer as necessary. conn_buf[conn_len] is kept NUL-terminated.
+// Returns 0 on success, 1 on peer close (EOF), -1 on read timeout,
+// -2 on fatal read error, -3 on out-of-memory growing the buffer.
+static int conn_fill(int sock, SSL *ssl, char **conn_buf, size_t *conn_cap,
+                     size_t *conn_len, size_t need, bool use_ssl) {
+    while (*conn_len < need) {
+        // Grow so there is always a free byte to read into plus room for NUL.
+        if (*conn_cap < *conn_len + 2) {
+            size_t newcap = *conn_cap * 2;
+            if (newcap < need + 1) newcap = need + 1;
+            char *nb = (char *)realloc(*conn_buf, newcap);
+            if (!nb) return -3;
+            *conn_buf = nb;
+            *conn_cap = newcap;
+        }
+        size_t space = *conn_cap - 1 - *conn_len;
+        ssize_t n;
+        if (use_ssl) {
+            n = SSL_read(ssl, *conn_buf + *conn_len, (int)space);
+            if (n <= 0) {
+                int err = SSL_get_error(ssl, (int)n);
+                if (err == SSL_ERROR_ZERO_RETURN) return 1;      // clean EOF
+                if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE)
+                    return -1;                                    // stalled/timeout
+                if (err == SSL_ERROR_SYSCALL) {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == ETIMEDOUT)
+                        return -1;                                // timeout
+                    if (errno == 0) return 1;                     // unexpected EOF
+                    return -2;
+                }
+                ERR_print_errors_fp(stderr);
+                fprintf(stderr, "SSL_read error on socket %d.\n", sock);
+                return -2;
+            }
+        } else {
+            n = read(sock, *conn_buf + *conn_len, space);
+            if (n == 0) return 1;                                 // EOF
+            if (n < 0) {
+                if (errno == EINTR) continue;
+                if (errno == EAGAIN || errno == EWOULDBLOCK || errno == ETIMEDOUT)
+                    return -1;                                    // timeout
+                perror("read error");
+                return -2;
+            }
+        }
+        *conn_len += (size_t)n;
+        (*conn_buf)[*conn_len] = '\0';
+    }
+    return 0;
+}
+
+// Select the active site for this request from its Host header, falling back
+// to the listener's default site. Returns NULL when no site can serve it.
+static SiteConfig *select_active_site(ListenSocket *listener,
+                                      const char *request_buf, size_t hdr_len) {
+    char hostname[MAX_LINE_SIZE] = {0};
+    size_t vlen = 0;
+    const char *hv = find_header_value(request_buf, hdr_len, "Host", &vlen);
+    if (hv) {
+        if (vlen >= MAX_LINE_SIZE) vlen = MAX_LINE_SIZE - 1;
+        memcpy(hostname, hv, vlen);
+        hostname[vlen] = '\0';
+    }
+    SiteConfig *site = NULL;
+    if (strlen(hostname) > 0) {
+        site = find_site_for_hostname(listener, hostname);
+    }
+    if (site == NULL && listener->site_count > 0) {
+        site = listener->sites[0]; // default site fallback
+    }
+    return site;
+}
+
+// Build a fresh per-request ServerInfo (server_ip/remote_ip are strdup'd and
+// freed by free_request_members in parser.c; root_dir/default_page/server_name
+// are borrowed pointers owned by the site config). Returns NULL on allocation
+// failure. The caller must pass the resulting pointer to HandleRequest, which
+// owns its lifetime.
+static ServerInfo *build_server_info(ListenSocket *listener,
+                                     struct sockaddr_storage *remote_addr,
+                                     socklen_t remote_addr_len,
+                                     SiteConfig *active_site) {
+    ServerInfo *si = (ServerInfo *)calloc(1, sizeof(ServerInfo));
+    if (!si) { perror("calloc ServerInfo"); return NULL; }
+
+    char server_ip_str[INET6_ADDRSTRLEN];
+    struct sockaddr_storage local_addr;
+    socklen_t local_addr_len = sizeof(local_addr);
+    if (getsockname(listener->sock_fd, (struct sockaddr *)&local_addr, &local_addr_len) == 0) {
+        if (local_addr.ss_family == AF_INET) {
+            inet_ntop(AF_INET, &((struct sockaddr_in *)&local_addr)->sin_addr,
+                      server_ip_str, sizeof(server_ip_str));
+            si->server_port = ntohs(((struct sockaddr_in *)&local_addr)->sin_port);
+        } else if (local_addr.ss_family == AF_INET6) {
+            inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&local_addr)->sin6_addr,
+                      server_ip_str, sizeof(server_ip_str));
+            si->server_port = ntohs(((struct sockaddr_in6 *)&local_addr)->sin6_port);
+        } else {
+            strcpy(server_ip_str, "N/A");
+            si->server_port = 0;
+        }
+    } else {
+        perror("getsockname failed for server IP");
+        strcpy(server_ip_str, "N/A");
+        si->server_port = 0;
+    }
+    si->server_ip = strdup(server_ip_str);
+    if (!si->server_ip) { perror("strdup server_ip"); free(si); return NULL; }
+
+    char remote_ip_str[INET6_ADDRSTRLEN];
+    if (remote_addr_len > 0) {
+        if (remote_addr->ss_family == AF_INET) {
+            inet_ntop(AF_INET, &((struct sockaddr_in *)remote_addr)->sin_addr,
+                      remote_ip_str, sizeof(remote_ip_str));
+            si->remote_port = ntohs(((struct sockaddr_in *)remote_addr)->sin_port);
+        } else if (remote_addr->ss_family == AF_INET6) {
+            inet_ntop(AF_INET6, &((struct sockaddr_in6 *)remote_addr)->sin6_addr,
+                      remote_ip_str, sizeof(remote_ip_str));
+            si->remote_port = ntohs(((struct sockaddr_in6 *)remote_addr)->sin6_port);
+        } else {
+            strcpy(remote_ip_str, "N/A");
+            si->remote_port = 0;
+        }
+    } else {
+        strcpy(remote_ip_str, "N/A");
+        si->remote_port = 0;
+    }
+    si->remote_ip = strdup(remote_ip_str);
+    if (!si->remote_ip) {
+        perror("strdup remote_ip");
+        free(si->server_ip);
+        free(si);
+        return NULL;
+    }
+
+    si->root_dir = active_site->root_dir;
+    si->default_page = active_site->default_page;
+    si->num_default_page = active_site->num_default_page;
+    si->server_name = active_site->server_name;
+    si->num_server_names = active_site->num_server_names;
+    return si;
+}
+
+// Send a minimal text error response that always closes the connection.
+static void send_error_close(int sock, SSL *ssl, int code,
+                             const char *reason, const char *body) {
+    char buf[512];
+    int n = snprintf(buf, sizeof(buf),
+        "HTTP/1.1 %d %s\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+        code, reason, strlen(body), body);
+    if (n < 0) return;
+    if ((size_t)n >= sizeof(buf)) n = (int)sizeof(buf) - 1;
+    write_all(sock, ssl, buf, (size_t)n);
+}
+
 // Function to handle a single client connection
 void *handle_client(void *thread_args_ptr) {
     ClientThreadArgs *args = (ClientThreadArgs*) thread_args_ptr;
@@ -144,31 +348,24 @@ void *handle_client(void *thread_args_ptr) {
 
     SSL *ssl = NULL;
     bool use_ssl = listener->config.ssl_enabled;
-    SiteConfig *active_site = NULL; // This will hold the dynamically selected SiteConfig
 
-    // --- Allocate buffers on the heap to avoid stack overflow ---
-    // MAX_REQUEST_SIZE for request buffer (for headers, POST body will be handled by parser)
-    char *request_buffer = (char *)malloc(MAX_REQUEST_SIZE + 1); // +1 for null terminator
-
-    if (!request_buffer) {
-        perror("Failed to allocate request_buffer in handle_client");
+    // --- Persistent connection read buffer ---
+    // Holds header + body + any pipelined bytes across keep-alive requests.
+    // Grown on demand; always NUL-terminated at buf_len.
+    size_t conn_cap = MAX_REQUEST_SIZE + 1;
+    char *conn_buf = (char *)malloc(conn_cap);
+    if (!conn_buf) {
+        perror("Failed to allocate conn_buf in handle_client");
         close(sock);
         pthread_exit(NULL);
     }
-    
-    // Initialize request buffer to zero
-    memset(request_buffer, 0, MAX_REQUEST_SIZE + 1);
-
-    // Response buffer is allocated on demand inside HandleRequest (char **response_out)
-    // and freed at the end of this function. It starts as NULL.
-    char *response_buffer = NULL;
-    size_t actual_response_len = 0; // This will be filled by HandleRequest
-
+    conn_buf[0] = '\0';
+    size_t buf_len = 0; // valid bytes buffered
 
     // --- Set socket timeouts BEFORE the TLS handshake so a slow or stalled
     //     handshake cannot pin a worker thread forever (H2). ---
     struct timeval timeout;
-    timeout.tv_sec = 5;  // 5 second timeout
+    timeout.tv_sec = 5;  // 5 second timeout (initial request / handshake)
     timeout.tv_usec = 0;
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof timeout);
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout, sizeof timeout);
@@ -182,8 +379,7 @@ void *handle_client(void *thread_args_ptr) {
             ERR_print_errors_fp(stderr);
             fprintf(stderr, "Error creating SSL object for socket %d.\n", sock);
             close(sock);
-            free(request_buffer); // Clean up
-            free(response_buffer); // Clean up
+            free(conn_buf); // Clean up
             pthread_exit(NULL);
         }
         SSL_set_fd(ssl, sock);
@@ -195,8 +391,7 @@ void *handle_client(void *thread_args_ptr) {
             ERR_print_errors_fp(stderr); // Print OpenSSL error stack
             close(sock);
             SSL_free(ssl);
-            free(request_buffer); // Clean up
-            free(response_buffer); // Clean up
+            free(conn_buf); // Clean up
             pthread_exit(NULL);
         }
         fprintf(stderr, "SSL handshake successful for socket %d.\n", sock);
@@ -204,251 +399,119 @@ void *handle_client(void *thread_args_ptr) {
     // --- END SSL HANDSHAKE ---
 
 
-    // --- Read the HTTP Request (using SSL_read or read) ---
-    ssize_t bytes_received = 0;
-    ssize_t total_bytes_received = 0;
-    // Note: SO_RCVTIMEO/SO_SNDTIMEO were already set before the TLS handshake.
-
-    while (total_bytes_received < MAX_REQUEST_SIZE - 1) {
-        if (use_ssl) {
-            bytes_received = SSL_read(ssl, request_buffer + total_bytes_received, MAX_REQUEST_SIZE - 1 - total_bytes_received);
-        } else {
-            bytes_received = read(sock, request_buffer + total_bytes_received, MAX_REQUEST_SIZE - 1 - total_bytes_received);
-        }
-
-        if (bytes_received < 0) {
-            if (use_ssl) {
-                int ssl_err = SSL_get_error(ssl, bytes_received);
-                if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
-                    // Blocking socket with SO_RCVTIMEO: this normally indicates the
-                    // receive timed out. Bail out instead of busy-looping forever.
-                    fprintf(stderr, "SSL read timeout for socket %d.\n", sock);
-                    break;
-                }
-                fprintf(stderr, "SSL_read error for socket %d, error: %d\n", sock, ssl_err);
-                ERR_print_errors_fp(stderr);
-            } else {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    // Blocking socket with SO_RCVTIMEO: Linux reports the receive
-                    // timeout as EAGAIN (not ETIMEDOUT). Treat it as a timeout and
-                    // stop reading, otherwise the thread busy-loops forever.
-                    fprintf(stderr, "Read timeout for socket %d.\n", sock);
-                    break;
-                }
-                if (errno == ETIMEDOUT) { // Handle read timeout
-                    fprintf(stderr, "Read timeout for socket %d.\n", sock);
-                    break;
-                }
-                perror("read error");
+    // --- Keep-alive request loop ---
+    // Serve many requests on the same socket until the client asks to close
+    // ("Connection: close"), an idle timeout fires, or a framing error makes
+    // the request boundary unknowable (in which case we must close to avoid
+    // desynchronising the stream).
+    for (;;) {
+        // 1) Accumulate the full HTTP headers (terminated by "\r\n\r\n").
+        size_t hdr_len = 0; // header block length, including the terminator
+        char *hdr_end = NULL;
+        for (;;) {
+            hdr_end = find_header_terminator(conn_buf, buf_len);
+            if (hdr_end) {
+                hdr_len = (size_t)(hdr_end - conn_buf) + 4;
+                break;
             }
-            break; // Break on fatal read error
-        }
-        if (bytes_received == 0) {
-            // Client closed connection
-            fprintf(stderr, "Client closed connection on socket %d.\n", sock);
-            break;
+            if (buf_len >= MAX_REQUEST_SIZE) {
+                fprintf(stderr, "Request headers too large on socket %d.\n", sock);
+                send_error_close(sock, ssl, 431, "Request Header Fields Too Large",
+                                 "Request header fields too large.");
+                goto conn_close;
+            }
+            int rr = conn_fill(sock, ssl, &conn_buf, &conn_cap, &buf_len,
+                               buf_len + 1, use_ssl);
+            if (rr != 0) goto conn_close; // EOF / timeout / error -> close
         }
 
-        total_bytes_received += bytes_received;
-        request_buffer[total_bytes_received] = '\0'; // Null-terminate the buffer
+        // 2) Determine the body length from Content-Length to find the request
+        //    boundary, so leftover body bytes never desync the next request.
+        size_t content_length = 0;
+        if (header_content_length(conn_buf, hdr_len, &content_length) != 0) {
+            content_length = 0; // absent/invalid -> no body
+        }
+        size_t req_len = hdr_len + content_length;
+        if (req_len > MAX_REQUEST_SIZE) {
+            fprintf(stderr, "Request too large on socket %d (Content-Length %zu).\n",
+                    sock, content_length);
+            send_error_close(sock, ssl, 413, "Payload Too Large",
+                             "Request entity too large.");
+            goto conn_close;
+        }
 
-        // Check for end of HTTP headers (empty line)
-        if (total_bytes_received >= 4) {
-            if (strstr(request_buffer, "\r\n\r\n") != NULL) {
-                break; // End of headers found
+        // 3) Read the remainder of the body, if any.
+        while (buf_len < req_len) {
+            int rr = conn_fill(sock, ssl, &conn_buf, &conn_cap, &buf_len,
+                               req_len, use_ssl);
+            if (rr != 0) {
+                fprintf(stderr, "Truncated request body on socket %d; closing.\n", sock);
+                goto conn_close; // cannot keep alive without a known boundary
             }
         }
-    }
 
-    if (total_bytes_received == 0) {
-        fprintf(stderr, "No data received or connection closed immediately for socket %d.\n", sock);
-        if (use_ssl) SSL_free(ssl);
-        close(sock);
-        free(request_buffer); // Clean up
-        free(response_buffer); // Clean up
-        pthread_exit(NULL);
-    }
-
-    // --- Determine Active Site based on Host header (HTTP and HTTPS after handshake) ---
-    char *host_header_start = FindCaseInsensitive(request_buffer, "\r\nHost: ");
-    char hostname[MAX_LINE_SIZE] = {0};
-    if (host_header_start) {
-        host_header_start += strlen("\r\nHost: ");
-        char *host_header_end = strchr(host_header_start, '\r');
-        if (host_header_end) {
-            size_t host_len = (size_t)(host_header_end - host_header_start);
-            // Clamp to the destination buffer to avoid a stack out-of-bounds write
-            // when the Host header value is >= MAX_LINE_SIZE.
-            if (host_len >= MAX_LINE_SIZE) {
-                host_len = MAX_LINE_SIZE - 1;
-            }
-            memcpy(hostname, host_header_start, host_len);
-            hostname[host_len] = '\0';
+        // 4) Select the active site for THIS request (Host header + fallback).
+        SiteConfig *active_site = select_active_site(listener, conn_buf, hdr_len);
+        if (active_site == NULL) {
+            fprintf(stderr, "Error: No site configured for this listener.\n");
+            send_error_close(sock, ssl, 500, "Internal Server Error",
+                             "No site configured for this port.");
+            goto conn_close;
         }
-    }
 
-    if (strlen(hostname) > 0) {
-        active_site = find_site_for_hostname(listener, hostname);
-        if (active_site) {
-            fprintf(stderr, "Selected site for Host '%s': %s (root: %s)\n", hostname, active_site->server_name[0], active_site->root_dir);
-        } else {
-            fprintf(stderr, "No specific site found for Host '%s'. Attempting to use default site if any.\n", hostname);
+        // 5) Build a fresh ServerInfo for this request (freed by parser.c).
+        ServerInfo *server_info = build_server_info(listener, &remote_addr,
+                                                    remote_addr_len, active_site);
+        if (server_info == NULL) {
+            send_error_close(sock, ssl, 500, "Internal Server Error",
+                             "Server out of memory.");
+            goto conn_close;
         }
-    }
 
-    // Fallback to the first site associated with this listener if no Host header or no match
-    if (active_site == NULL && listener->site_count > 0) {
-        active_site = listener->sites[0]; // Use the first site as a default if no Host header or no match
-        fprintf(stderr, "Using default/first associated site: %s (root: %s)\n", active_site->server_name[0], active_site->root_dir);
-    } else if (active_site == NULL) {
-        fprintf(stderr, "Error: No site configured for this listener! Cannot serve request on socket %d.\n", sock);
-        const char* error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nNo site configured for this port.";
-        write_all(sock, ssl, error_response, strlen(error_response));
-        if (use_ssl) SSL_free(ssl);
-        close(sock);
-        free(request_buffer); // Clean up
-        free(response_buffer); // Clean up
-        pthread_exit(NULL);
-    }
+        // 6) Dispatch to the request pipeline.
+        char *response_buffer = NULL;
+        size_t response_len = 0;
+        bool keep_alive = false;
+        HandleRequest(server_info, req_len, conn_buf,
+                      &response_buffer, &response_len, &keep_alive);
+        // HandleRequest frees server_info (via free_request_members).
 
-    // --- NEW: Prepare ServerInfo for HandleRequest ---
-    ServerInfo *server_info = (ServerInfo*)malloc(sizeof(ServerInfo));
-    if (server_info == NULL) {
-        perror("malloc failed for ServerInfo in client.c");
-        // Handle error, send 500 or exit thread
-        const char* error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nServer out of memory.";
-        write_all(sock, ssl, error_response, strlen(error_response));
-        if (use_ssl) SSL_free(ssl);
-        close(sock);
-        free(request_buffer); // Clean up
-        free(response_buffer); // Clean up
-        pthread_exit(NULL);
-    }
-    memset(server_info, 0, sizeof(ServerInfo));
-
-    // Get server IP and port (local address of the listener socket)
-    char server_ip_str[INET6_ADDRSTRLEN];
-    struct sockaddr_storage local_addr;
-    socklen_t local_addr_len = sizeof(local_addr);
-
-    if (getsockname(listener->sock_fd, (struct sockaddr *)&local_addr, &local_addr_len) == 0) {
-        if (local_addr.ss_family == AF_INET) {
-            inet_ntop(AF_INET, &((struct sockaddr_in*)&local_addr)->sin_addr, server_ip_str, sizeof(server_ip_str));
-            server_info->server_port = ntohs(((struct sockaddr_in*)&local_addr)->sin_port);
-        } else if (local_addr.ss_family == AF_INET6) {
-            inet_ntop(AF_INET6, &((struct sockaddr_in6*)&local_addr)->sin6_addr, server_ip_str, sizeof(server_ip_str));
-            server_info->server_port = ntohs(((struct sockaddr_in6*)&local_addr)->sin6_port);
-        } else {
-            strcpy(server_ip_str, "N/A");
-            server_info->server_port = 0;
+        // 7) Write the response.
+        if (response_buffer == NULL) {
+            fprintf(stderr, "No response produced for socket %d.\n", sock);
+            goto conn_close;
         }
-        server_info->server_ip = strdup(server_ip_str); // Duplicate for parser.c to free
-        if (!server_info->server_ip) {
-            perror("strdup failed for server_ip in client.c");
-            // Handle error, send 500 or exit thread
-            const char* error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nServer out of memory.";
-            write_all(sock, ssl, error_response, strlen(error_response));
-            if (use_ssl) SSL_free(ssl);
-            close(sock);
-            free(request_buffer);
-            free(response_buffer);
-            free(server_info); // Free server_info if strdup failed
-            pthread_exit(NULL);
-        }
-    } else {
-        perror("getsockname failed for server IP in client.c");
-        server_info->server_ip = strdup("N/A");
-        server_info->server_port = 0;
-        if (!server_info->server_ip) { // Check strdup failure even for N/A
-            perror("strdup failed for server_ip N/A in client.c");
-            // Handle error, send 500 or exit thread
-            const char* error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nServer out of memory.";
-            write_all(sock, ssl, error_response, strlen(error_response));
-            if (use_ssl) SSL_free(ssl);
-            close(sock);
-            free(request_buffer);
-            free(response_buffer);
-            free(server_info); // Free server_info if strdup failed
-            pthread_exit(NULL);
-        }
-    }
-
-    // Get remote IP and port (client's address)
-    char remote_ip_str[INET6_ADDRSTRLEN];
-    if (remote_addr_len > 0) { // Check if remote_addr was successfully populated
-        if (remote_addr.ss_family == AF_INET) {
-            inet_ntop(AF_INET, &((struct sockaddr_in*)&remote_addr)->sin_addr, remote_ip_str, sizeof(remote_ip_str));
-            server_info->remote_port = ntohs(((struct sockaddr_in*)&remote_addr)->sin_port);
-        } else if (remote_addr.ss_family == AF_INET6) {
-            inet_ntop(AF_INET6, &((struct sockaddr_in6*)&remote_addr)->sin6_addr, remote_ip_str, sizeof(remote_ip_str));
-            server_info->remote_port = ntohs(((struct sockaddr_in6*)&remote_addr)->sin6_port);
-        } else {
-            strcpy(remote_ip_str, "N/A");
-            server_info->remote_port = 0;
-        }
-        server_info->remote_ip = strdup(remote_ip_str); // Duplicate for parser.c to free
-        if (!server_info->remote_ip) {
-            perror("strdup failed for remote_ip in client.c");
-            // Handle error, send 500 or exit thread
-            const char* error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nServer out of memory.";
-            write_all(sock, ssl, error_response, strlen(error_response));
-            if (use_ssl) SSL_free(ssl);
-            close(sock);
-            free(request_buffer);
-            free(response_buffer);
-            free(server_info->server_ip); // Free server_ip if it was allocated
-            free(server_info); // Free server_info if strdup failed
-            pthread_exit(NULL);
-        }
-    } else {
-        server_info->remote_ip = strdup("N/A");
-        server_info->remote_port = 0;
-        if (!server_info->remote_ip) { // Check strdup failure even for N/A
-            perror("strdup failed for remote_ip N/A in client.c");
-            // Handle error, send 500 or exit thread
-            const char* error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nServer out of memory.";
-            write_all(sock, ssl, error_response, strlen(error_response));
-            if (use_ssl) SSL_free(ssl);
-            close(sock);
-            free(request_buffer);
-            free(response_buffer);
-            free(server_info->server_ip); // Free server_ip if it was allocated
-            free(server_info); // Free server_info if strdup failed
-            pthread_exit(NULL);
-        }
-    }
-    
-    server_info->root_dir = active_site->root_dir; // This is a pointer, not a copy. Ownership remains with SiteConfig.
-    server_info->default_page = active_site->default_page; 
-    server_info->num_default_page = active_site->num_default_page;
-    server_info->server_name = active_site->server_name;
-    server_info->num_server_names = active_site->num_server_names;
-    // --- END NEW ---
-
-
-    // --- Prepare and Send the HTTP Response (using SSL_write or write) ---
-    // HandleRequest now receives ServerInfo* directly
-    HandleRequest(server_info, total_bytes_received, request_buffer,
-                &response_buffer, &actual_response_len);
-
-    // server_info (with strdup'd server_ip/remote_ip) is freed by free_request_members
-    // in parser.c; root_dir/default_page/server_name stay owned by SiteConfig.
-    // response_buffer is allocated on demand inside HandleRequest and freed below.
-
-    if (write_all(sock, ssl, response_buffer, actual_response_len) < 0) {
+        if (write_all(sock, ssl, response_buffer, response_len) < 0) {
             fprintf(stderr, "Response write failed for socket %d.\n", sock);
+            free(response_buffer);
+            goto conn_close;
         }
+        free(response_buffer);
 
+        // 8) Consume the request from the buffer (supports pipelining).
+        buf_len -= req_len;
+        if (buf_len > 0) memmove(conn_buf, conn_buf + req_len, buf_len);
+        conn_buf[buf_len] = '\0';
+
+        // 9) Keep alive only if the parser says the connection may persist.
+        if (!keep_alive) goto conn_close;
+
+        // Re-arm the longer idle timeout for the next keep-alive request.
+        struct timeval ka_timeout;
+        ka_timeout.tv_sec = KEEP_ALIVE_IDLE_SEC;
+        ka_timeout.tv_usec = 0;
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
+                   (const char *)&ka_timeout, sizeof ka_timeout);
+    }
+
+conn_close:
     // --- Shutdown and Cleanup ---
     if (use_ssl) {
         SSL_shutdown(ssl); // Perform graceful SSL shutdown
         SSL_free(ssl);     // Free the SSL object
     }
     close(sock); // Close the underlying socket
-
-    // Free heap-allocated buffers
-    free(request_buffer);
-    free(response_buffer);
+    free(conn_buf);
 
     pthread_exit(NULL); // Exit the thread
 }

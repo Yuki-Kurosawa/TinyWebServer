@@ -14,6 +14,26 @@
 #include "handlers/static_file.h" 
 #include "handlers/dynamic_handler.h" 
 
+/* RFC 9110 §7.6.1: the Connection header is a comma-separated list of
+ * connection options. Return true if the exact token (case-insensitive) is
+ * present, e.g. "close" or "keep-alive" in "keep-alive, Upgrade". */
+static bool connection_has_token(const char *value, const char *token) {
+    if (!value || !token) return false;
+    size_t tlen = strlen(token);
+    const char *p = value;
+    while (*p) {
+        while (*p == ',' || *p == ' ' || *p == '\t') p++;
+        const char *start = p;
+        while (*p && *p != ',') p++;
+        const char *end = p;
+        while (end > start && (end[-1] == ' ' || end[-1] == '\t')) end--;
+        if ((size_t)(end - start) == tlen && strncasecmp(start, token, tlen) == 0)
+            return true;
+        if (*p == ',') p++;
+    }
+    return false;
+}
+
 char* URLDecode(const char* encoded_str) {
     if (encoded_str == NULL) {
         return NULL;
@@ -410,6 +430,7 @@ int PacketToRequestObject(char* request_buffer, size_t req_len, Request *req)
 	req->accept = strdup("*/*"); // strdup copy so free_request_members() can safely free it (default must be heap, not a literal, or malformed requests abort with free(): invalid pointer)
 	req->content_type = NULL;
 	req->content_length = 0;
+	req->connection = NULL;
 	req->cookie_count = 0;
 	req->cookies = NULL;
 	req->header_count = 0;
@@ -530,6 +551,10 @@ int PacketToRequestObject(char* request_buffer, size_t req_len, Request *req)
             } else if (strcasecmp(header_name, "Content-Length") == 0) {
                 req->content_length = strtol(header_value, NULL, 10);
 				req->body_len =req->content_length;
+            } else if (strcasecmp(header_name, "Connection") == 0) {
+                // Keep-alive / close connection persistence semantics.
+                if (req->connection) free(req->connection);
+                req->connection = strdup(header_value);
             } else if (strcasecmp(header_name, "Accept") == 0) {
 				// Free the default "*/*" strdup from init before overwriting (else 4B/request leak)
 				if (req->accept) free(req->accept);
@@ -797,6 +822,7 @@ void free_request_members(Request *req) {
     if (req->user_agent) free(req->user_agent);
     if (req->accept) free(req->accept);
     if (req->content_type) free(req->content_type);
+    if (req->connection) free(req->connection);
     if (req->cookies) {
         for (int i = 0; i < req->cookie_count; ++i) {
             free(req->cookies[i].key);
@@ -857,9 +883,12 @@ void free_response_members(Response *res) {
 
 
 /* the http request outer handler */
-void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], char **response_out, size_t *response_len_out)
+void HandleRequest(ServerInfo *server_info, size_t req_len, char request[],
+                   char **response_out, size_t *response_len_out,
+                   bool *keep_alive_out)
 {
 	*response_len_out = 0;
+	if (keep_alive_out) *keep_alive_out = false;
 
 	if (req_len == 0 || request == NULL) {
 		return;
@@ -923,6 +952,20 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], char
         return; // Critical failure, cannot proceed
     }
 
+    // HTTP connection persistence (RFC 9110 §7.3). Only keep the connection
+    // open when the request parsed cleanly; on any parse error we cannot be
+    // sure of the request boundary, so the caller must close.
+    //   HTTP/1.1 : keep-alive by default, close only on "Connection: close".
+    //   HTTP/1.0 : close by default, keep-alive only on "Connection: keep-alive".
+    if (ERR_PARSE == 0) {
+        bool wants_close = connection_has_token(req->connection, "close");
+        bool wants_keep  = connection_has_token(req->connection, "keep-alive");
+        if (req->version == HTTP_1_0) {
+            resp->keep_alive = wants_keep;
+        } else {
+            resp->keep_alive = !wants_close;
+        }
+    }
 
 	if(ERR_PARSE==0 && req->path != NULL)
 	{
@@ -1281,6 +1324,8 @@ void HandleRequest(ServerInfo *server_info, size_t req_len, char request[], char
 	*response_len_out = response_size;
 
     // Free dynamically allocated members of Request and Response
+    // Capture the connection-persistence decision before resp is freed.
+    if (keep_alive_out) *keep_alive_out = resp->keep_alive;
     free_request_members(req);
 	free_response_members(resp);
 

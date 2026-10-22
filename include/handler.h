@@ -101,6 +101,7 @@ typedef struct {
 	char *accept; // Accept header
 	char *content_type; // Content-Type header, for POST and PUT requests, otherwise it is NULL
 	size_t content_length; // Content-Length header, for POST and PUT requests,otherwise it is 0
+	char *connection; // Connection header value ("keep-alive"/"close"/list), for connection persistence
 	/* common headers ends here */
 
 	/* Cookies, first version may not need this */
