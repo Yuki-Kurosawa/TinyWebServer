@@ -4,7 +4,7 @@
 
 clear 
 
-rm -rf www
+rm -rf yuki
 
 gcc -DGLOBAL_CONFIG_PATH="\"./yuki.conf\"" -DSITES_DIR_PATH="\"./sites\"" \
 -o yuki \
